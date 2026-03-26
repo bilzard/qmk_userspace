@@ -114,6 +114,11 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
   return result;
 }
 
+// 動的Tapping Termが有効な場合のみ変数を宣言
+#ifdef DYNAMIC_TAPPING_TERM_ENABLE
+extern uint16_t g_tapping_term;
+#endif
+
 uint16_t get_tapping_term(uint16_t keycode, keyrecord_t *record) {
     // 1. Shiftを含むMod-Tapの場合
     if (IS_QK_MOD_TAP(keycode) && (QK_MOD_TAP_GET_MODS(keycode) & MOD_MASK_SHIFT)) {
@@ -128,6 +133,10 @@ uint16_t get_tapping_term(uint16_t keycode, keyrecord_t *record) {
         }
     }
 
-    // 3. 上記以外（「da」で誤爆しやすいAlt等のMod-Tapを含む）はデフォルト値にフォールバック
-    return TAPPING_TERM;
+    // 3. 上記以外は rules.mk の設定に合わせてフォールバックを自動切替
+#ifdef DYNAMIC_TAPPING_TERM_ENABLE
+    return g_tapping_term; // yesの時: Remap等で動的に変更した値を使用
+#else
+    return TAPPING_TERM;   // noの時: config.h の固定値（250）を使用
+#endif
 }
