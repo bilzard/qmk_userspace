@@ -33,7 +33,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
   //|--------+--------+--------+--------+--------+--------|   |--------+--------+--------+--------+--------+--------+--------|
       KC_LSFT,    KC_Z,    KC_X,    KC_C,    KC_V,    KC_B,        KC_N,    KC_M, KC_COMM,  KC_DOT, KC_SLSH, KC_RSFT, MO(_FN),
   //|--------+--------+--------+--------+--------+--------|   |--------+--------+--------+--------+--------+--------+--------|
-               KC_LALT, KC_LGUI,  KC_SPC,  KC_SPC,               KC_SPC,  KC_SPC,          KC_RGUI, KC_RALT 
+               KC_LALT, KC_LGUI,  KC_SPC,  KC_SPC,               KC_SPC,  KC_SPC,          KC_RGUI, KC_RALT
           //`---------------------------------------------|   |--------------------------------------------'
   ),
 
@@ -47,7 +47,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
   //|--------+--------+--------+--------+--------+--------|   |--------+--------+--------+--------+--------+--------+--------|
       _______, _______, _______, _______, _______, _______,     _______, _______,  KC_END, KC_PGDN, KC_DOWN, _______, _______,
   //|--------+--------+--------+--------+--------+--------|   |--------+--------+--------+--------+--------+--------+--------|
-               _______, _______, _______, _______,              _______, _______,          KC_STOP, _______ 
+               _______, _______, _______, _______,              _______, _______,          KC_STOP, _______
           //`---------------------------------------------|   |--------------------------------------------'
   ),
 
@@ -61,7 +61,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
   //|--------+--------+--------+--------+--------+--------|   |--------+--------+--------+--------+--------+--------+--------|
       XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX,     UG_VALD, UG_VALU, UG_HUED, UG_HUEU, UG_SATD, UG_SATU, XXXXXXX,
   //|--------+--------+--------+--------+--------+--------|   |--------+--------+--------+--------+--------+--------+--------|
-               XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX,              XXXXXXX, XXXXXXX,          KC_STOP, XXXXXXX 
+               XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX,              XXXXXXX, XXXXXXX,          KC_STOP, XXXXXXX
           //`---------------------------------------------|   |--------------------------------------------'
   )
 };
@@ -112,4 +112,22 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
   }
 
   return result;
+}
+
+uint16_t get_tapping_term(uint16_t keycode, keyrecord_t *record) {
+    // 1. Shiftを含むMod-Tapの場合
+    if (IS_QK_MOD_TAP(keycode) && (QK_MOD_TAP_GET_MODS(keycode) & MOD_MASK_SHIFT)) {
+        return TAPPING_TERM_FAST;
+    }
+
+    // 2. レイヤー1または2へのLayer-Tapの場合
+    if (IS_QK_LAYER_TAP(keycode)) {
+        uint8_t layer = QK_LAYER_TAP_GET_LAYER(keycode);
+        if (layer == 1 || layer == 2) {
+            return TAPPING_TERM_FAST;
+        }
+    }
+
+    // 3. 上記以外（「da」で誤爆しやすいAlt等のMod-Tapを含む）はデフォルト値にフォールバック
+    return TAPPING_TERM;
 }
