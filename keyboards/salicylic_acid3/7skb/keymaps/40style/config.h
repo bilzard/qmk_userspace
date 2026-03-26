@@ -1,5 +1,6 @@
 #pragma once
 
-#define TAPPING_TERM 300
+#define TAPPING_TERM 250
 #define PERMISSIVE_HOLD
 #define QUICK_TAP_TERM 120
+#define DYNAMIC_TAPPING_TERM_INCREMENT 10
