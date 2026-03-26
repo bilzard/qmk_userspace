@@ -7,3 +7,4 @@
 
 #define TAPPING_TERM_PER_KEY
 #define TAPPING_TERM_FAST 150
+#define RETRO_TAPPING
