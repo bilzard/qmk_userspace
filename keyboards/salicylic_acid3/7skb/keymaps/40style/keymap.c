@@ -8,14 +8,13 @@ extern rgblight_config_t rgblight_config;
 
 extern uint8_t is_master;
 
-// Each layer gets a name for readability, which is then used in the keymap matrix below.
-// The underscores don't mean anything - you can have a layer called STUFF or any other name.
-// Layer names don't all need to be of the same length, obviously, and you can also skip them
-// entirely and just use numbers.
+// 1. レイヤーの定義を5枚（0-4）に合わせる
 enum layer_number {
   _QWERTY = 0,
-  _FN,
-  _ADJUST,
+  _LAYER1,  // 1: 記号
+  _LAYER2,  // 2: 数字
+  _LAYER3,  // 3: ショートカット
+  _LAYER4,  // 4: Fキー（新設用）
 };
 
 enum custom_keycodes {
@@ -31,15 +30,15 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
   //|--------+--------+--------+--------+--------+--------|   |--------+--------+--------+--------+--------+--------+--------+--------|
      KC_LCTL,     KC_A,    KC_S,    KC_D,    KC_F,    KC_G,        KC_H,    KC_J,    KC_K,    KC_L, KC_SCLN, KC_QUOT,  KC_ENT,
   //|--------+--------+--------+--------+--------+--------|   |--------+--------+--------+--------+--------+--------+--------|
-      KC_LSFT,    KC_Z,    KC_X,    KC_C,    KC_V,    KC_B,        KC_N,    KC_M, KC_COMM,  KC_DOT, KC_SLSH, KC_RSFT, MO(_FN),
+      KC_LSFT,    KC_Z,    KC_X,    KC_C,    KC_V,    KC_B,        KC_N,    KC_M, KC_COMM,  KC_DOT, KC_SLSH, KC_RSFT, MO(_LAYER1),
   //|--------+--------+--------+--------+--------+--------|   |--------+--------+--------+--------+--------+--------+--------|
                KC_LALT, KC_LGUI,  KC_SPC,  KC_SPC,               KC_SPC,  KC_SPC,          KC_RGUI, KC_RALT
           //`---------------------------------------------|   |--------------------------------------------'
   ),
 
-  [_FN] = LAYOUT(
+  [_LAYER1] = LAYOUT(
   //,-----------------------------------------------------|   |--------------------------------------------------------------------------------.
-  TG(_ADJUST),   KC_F1,   KC_F2,   KC_F3,   KC_F4,   KC_F5,       KC_F6,   KC_F7,   KC_F8,   KC_F9,  KC_F10,  KC_F11,  KC_F12,  KC_INS,  KC_DEL,
+  TG(_LAYER3),   KC_F1,   KC_F2,   KC_F3,   KC_F4,   KC_F5,       KC_F6,   KC_F7,   KC_F8,   KC_F9,  KC_F10,  KC_F11,  KC_F12,  KC_INS,  KC_DEL,
   //|--------+--------+--------+--------+--------+--------|   |--------+--------+--------+--------+--------+--------+--------+--------+--------|
       _______, _______, _______, _______, _______, _______,     _______, _______, KC_PSCR, KC_SCRL,KC_PAUSE,   KC_UP, _______, KC_BSPC,
   //|--------+--------+--------+--------+--------+--------|   |--------+--------+--------+--------+--------+--------+--------+--------|
@@ -51,9 +50,9 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
           //`---------------------------------------------|   |--------------------------------------------'
   ),
 
-  [_ADJUST] = LAYOUT( /* Base */
+  [_LAYER3] = LAYOUT( /* Base */
   //,-----------------------------------------------------|   |--------------------------------------------------------------------------------.
-  TG(_ADJUST), XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX,     XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX,   QK_BOOT,
+  TG(_LAYER3), XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX,     XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX,   QK_BOOT,
   //|--------+--------+--------+--------+--------+--------|   |--------+--------+--------+--------+--------+--------+--------+--------+--------|
       XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX,     RGB_RST, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX,
   //|--------+--------+--------+--------+--------+--------|   |--------+--------+--------+--------+--------+--------+--------+--------|
@@ -66,22 +65,29 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
   )
 };
 
-
 //A description for expressing the layer position in LED mode.
 layer_state_t layer_state_set_user(layer_state_t state) {
 #ifdef RGBLIGHT_ENABLE
-    switch (get_highest_layer(state)) {
-    case _FN:
-      rgblight_sethsv_at(HSV_BLUE, 0);
+    // 現在の最高位レイヤーを取得
+    uint8_t layer = get_highest_layer(state);
+
+    switch (layer) {
+    case _LAYER1:
+      rgblight_sethsv_noeeprom(HSV_BLUE);   // FNレイヤーは青
       break;
-    case _ADJUST:
-      rgblight_sethsv_at(HSV_PURPLE, 0);
+    case _LAYER2:
+      rgblight_sethsv_noeeprom(HSV_PURPLE); // ADJUSTレイヤーは紫
       break;
-    default: //  for any other layers, or the default layer
-      rgblight_sethsv_at( 0, 0, 0, 0);
+    case _LAYER3:
+      rgblight_sethsv_noeeprom(HSV_GREEN);  // FKEYレイヤーは緑
+      break;
+    case _LAYER4:
+      rgblight_sethsv_noeeprom(HSV_YELLOW); // LAYER4は黄色
+      break;
+    default: // QWERTYレイヤー（デフォルト）
+      rgblight_sethsv_noeeprom(0, 0, 0);    // 消灯
       break;
     }
-    rgblight_set_effect_range( 1, 11);
 #endif
 return state;
 }
@@ -128,7 +134,7 @@ uint16_t get_tapping_term(uint16_t keycode, keyrecord_t *record) {
     // 2. レイヤー1または2へのLayer-Tapの場合
     if (IS_QK_LAYER_TAP(keycode)) {
         uint8_t layer = QK_LAYER_TAP_GET_LAYER(keycode);
-        if (layer == 1 || layer == 2) {
+        if (layer == _LAYER1 || layer == _LAYER2 || layer == _LAYER4) {
             return TAPPING_TERM_FAST;
         }
     }
