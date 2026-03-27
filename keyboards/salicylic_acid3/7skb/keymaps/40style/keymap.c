@@ -134,7 +134,7 @@ uint16_t get_tapping_term(uint16_t keycode, keyrecord_t *record) {
     // 2. レイヤー1または2へのLayer-Tapの場合
     if (IS_QK_LAYER_TAP(keycode)) {
         uint8_t layer = QK_LAYER_TAP_GET_LAYER(keycode);
-        if (layer == _LAYER1 || layer == _LAYER2 || layer == _LAYER4) {
+        if (layer == _LAYER1 || layer == _LAYER2 || layer == _LAYER3 || layer == _LAYER4) {
             return TAPPING_TERM_FAST;
         }
     }
