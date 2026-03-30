@@ -125,28 +125,42 @@ extern uint16_t g_tapping_term;
 #endif
 
 uint16_t get_tapping_term(uint16_t keycode, keyrecord_t *record) {
-    // 1. Mod-Tapの判定
+    uint16_t tap_keycode = KC_NO;
+
+    // 1. タップ側のキーコードを取得
     if (IS_QK_MOD_TAP(keycode)) {
-        uint16_t tap_keycode = QK_MOD_TAP_GET_TAP_KEYCODE(keycode);
-        // 「文字キーでない」かつ「Shiftが含まれる」場合のみFAST
-        if (!(tap_keycode >= KC_A && tap_keycode <= KC_0) &&
-            (QK_MOD_TAP_GET_MODS(keycode) & MOD_MASK_SHIFT)) {
-            return TAPPING_TERM_FAST;
-        }
+        tap_keycode = QK_MOD_TAP_GET_TAP_KEYCODE(keycode);
+    } else if (IS_QK_LAYER_TAP(keycode)) {
+        tap_keycode = QK_LAYER_TAP_GET_TAP_KEYCODE(keycode);
     }
-    // 2. Layer-Tapの判定
-    else if (IS_QK_LAYER_TAP(keycode)) {
-        uint16_t tap_keycode = QK_LAYER_TAP_GET_TAP_KEYCODE(keycode);
-        // 「文字キーでない」ならFAST
-        if (!(tap_keycode >= KC_A && tap_keycode <= KC_0)) {
-            return TAPPING_TERM_FAST;
+
+    // Hold-Tapキーである場合のみ判定を行う
+    if (tap_keycode != KC_NO) {
+        // 2. 「タイピングキー（文字・数字・記号）」かどうかの定義
+        bool is_typing_key = (tap_keycode >= KC_A && tap_keycode <= KC_0) ||
+                             (tap_keycode >= KC_MINUS && tap_keycode <= KC_SLASH);
+
+        // 3. 設計思想の反映：
+        // タイピングキー（Aや;など）は流れで誤爆しやすいため、すべてスルーして通常速度で保護する。
+        // 「非文字キー（Space, Enter, Tab等）」だった場合のみ、ホールド判定を早くする（FAST）
+        if (!is_typing_key) {
+
+            // ケース1：非文字キーでのレイヤー切り替えは、流れで押される可能性が低いため高速化
+            if (IS_QK_LAYER_TAP(keycode)) {
+                return TAPPING_TERM_FAST;
+            }
+
+            // ケース2：非文字キーでのMod-Tapは、Shiftの場合のみ高速化
+            if (IS_QK_MOD_TAP(keycode) && (QK_MOD_TAP_GET_MODS(keycode) & MOD_MASK_SHIFT)) {
+                return TAPPING_TERM_FAST;
+            }
         }
     }
 
-    // 3. 上記のFAST条件に漏れたもの（文字キーや他のModなど）はすべてここで一括返却
+    // 4. 上記の「高速化条件」から漏れたもの（文字キーのHold-Tapなど）はすべて通常速度
 #ifdef DYNAMIC_TAPPING_TERM_ENABLE
-    return g_tapping_term;
+    return g_tapping_term; // Remap等で変更した値
 #else
-    return TAPPING_TERM;
+    return TAPPING_TERM;   // config.h の固定値
 #endif
 }
