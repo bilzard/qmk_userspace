@@ -120,29 +120,33 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
   return result;
 }
 
-// 動的Tapping Termが有効な場合のみ変数を宣言
 #ifdef DYNAMIC_TAPPING_TERM_ENABLE
 extern uint16_t g_tapping_term;
 #endif
 
 uint16_t get_tapping_term(uint16_t keycode, keyrecord_t *record) {
-    // 1. Shiftを含むMod-Tapの場合
-    if (IS_QK_MOD_TAP(keycode) && (QK_MOD_TAP_GET_MODS(keycode) & MOD_MASK_SHIFT)) {
-        return TAPPING_TERM_FAST;
+    // 1. Mod-Tapの判定
+    if (IS_QK_MOD_TAP(keycode)) {
+        uint16_t tap_keycode = QK_MOD_TAP_GET_TAP_KEYCODE(keycode);
+        // 「文字キーでない」かつ「Shiftが含まれる」場合のみFAST
+        if (!(tap_keycode >= KC_A && tap_keycode <= KC_0) &&
+            (QK_MOD_TAP_GET_MODS(keycode) & MOD_MASK_SHIFT)) {
+            return TAPPING_TERM_FAST;
+        }
     }
-
-    // 2. レイヤー1または2へのLayer-Tapの場合
-    if (IS_QK_LAYER_TAP(keycode)) {
-        uint8_t layer = QK_LAYER_TAP_GET_LAYER(keycode);
-        if (layer == _LAYER1 || layer == _LAYER2 || layer == _LAYER3 || layer == _LAYER4) {
+    // 2. Layer-Tapの判定
+    else if (IS_QK_LAYER_TAP(keycode)) {
+        uint16_t tap_keycode = QK_LAYER_TAP_GET_TAP_KEYCODE(keycode);
+        // 「文字キーでない」ならFAST
+        if (!(tap_keycode >= KC_A && tap_keycode <= KC_0)) {
             return TAPPING_TERM_FAST;
         }
     }
 
-    // 3. 上記以外は rules.mk の設定に合わせてフォールバックを自動切替
+    // 3. 上記のFAST条件に漏れたもの（文字キーや他のModなど）はすべてここで一括返却
 #ifdef DYNAMIC_TAPPING_TERM_ENABLE
-    return g_tapping_term; // yesの時: Remap等で動的に変更した値を使用
+    return g_tapping_term;
 #else
-    return TAPPING_TERM;   // noの時: config.h の固定値（250）を使用
+    return TAPPING_TERM;
 #endif
 }
