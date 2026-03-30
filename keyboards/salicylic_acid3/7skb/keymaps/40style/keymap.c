@@ -124,43 +124,35 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 extern uint16_t g_tapping_term;
 #endif
 
+/*
+    ホールド判定の閾値を文脈に合わせて調整する
+    * 条件A: レイヤー切り替えまたはシフト修飾
+    * 条件B: 文字や記号に割り当てられていない場合
+    条件Aかつ条件Bの場合は小さめの閾値を適用、それ以外は通常の閾値を適用
+*/
 uint16_t get_tapping_term(uint16_t keycode, keyrecord_t *record) {
-    uint16_t tap_keycode = KC_NO;
+    // 条件A: レイヤー切り替えまたはシフト修飾
+    bool is_shift_mt_or_lt = (IS_QK_MOD_TAP(keycode) && (QK_MOD_TAP_GET_MODS(keycode) & MOD_MASK_SHIFT)) ||
+                             IS_QK_LAYER_TAP(keycode);
 
-    // 1. タップ側のキーコードを取得
-    if (IS_QK_MOD_TAP(keycode)) {
-        tap_keycode = QK_MOD_TAP_GET_TAP_KEYCODE(keycode);
-    } else if (IS_QK_LAYER_TAP(keycode)) {
-        tap_keycode = QK_LAYER_TAP_GET_TAP_KEYCODE(keycode);
-    }
+    if (is_shift_mt_or_lt) {
+        // タップ側のキーコードを取得
+        uint16_t tap_keycode = IS_QK_MOD_TAP(keycode) ?
+                               QK_MOD_TAP_GET_TAP_KEYCODE(keycode) :
+                               QK_LAYER_TAP_GET_TAP_KEYCODE(keycode);
 
-    // Hold-Tapキーである場合のみ判定を行う
-    if (tap_keycode != KC_NO) {
-        // 2. 「タイピングキー（文字・数字・記号）」かどうかの定義
+        // 条件B: 文字や記号に割り当てられていない場合
         bool is_typing_key = (tap_keycode >= KC_A && tap_keycode <= KC_0) ||
                              (tap_keycode >= KC_MINUS && tap_keycode <= KC_SLASH);
-
-        // 3. 設計思想の反映：
-        // タイピングキー（Aや;など）は流れで誤爆しやすいため、すべてスルーして通常速度で保護する。
-        // 「非文字キー（Space, Enter, Tab等）」だった場合のみ、ホールド判定を早くする（FAST）
         if (!is_typing_key) {
-
-            // ケース1：非文字キーでのレイヤー切り替えは、流れで押される可能性が低いため高速化
-            if (IS_QK_LAYER_TAP(keycode)) {
-                return TAPPING_TERM_FAST;
-            }
-
-            // ケース2：非文字キーでのMod-Tapは、Shiftの場合のみ高速化
-            if (IS_QK_MOD_TAP(keycode) && (QK_MOD_TAP_GET_MODS(keycode) & MOD_MASK_SHIFT)) {
-                return TAPPING_TERM_FAST;
-            }
+            return TAPPING_TERM_FAST;
         }
     }
 
-    // 4. 上記の「高速化条件」から漏れたもの（文字キーのHold-Tapなど）はすべて通常速度
+    // それ以外（文字・記号への割り当て、非ShiftのMod-Tap、通常の単打キーなど）は通常判定
 #ifdef DYNAMIC_TAPPING_TERM_ENABLE
-    return g_tapping_term; // Remap等で変更した値
+    return g_tapping_term;
 #else
-    return TAPPING_TERM;   // config.h の固定値
+    return TAPPING_TERM;
 #endif
 }
