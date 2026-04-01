@@ -141,9 +141,8 @@ uint16_t get_tapping_term(uint16_t keycode, keyrecord_t *record) {
                                QK_MOD_TAP_GET_TAP_KEYCODE(keycode) :
                                QK_LAYER_TAP_GET_TAP_KEYCODE(keycode);
 
-        // 条件B: 文字や記号に割り当てられていない場合
-        bool is_typing_key = (tap_keycode >= KC_A && tap_keycode <= KC_0) ||
-                             (tap_keycode >= KC_MINUS && tap_keycode <= KC_SLASH);
+        // 条件B: 文字や数字に割り当てられていない場合
+        bool is_typing_key = (tap_keycode >= KC_A && tap_keycode <= KC_0);
         if (!is_typing_key) {
             return TAPPING_TERM_FAST;
         }
