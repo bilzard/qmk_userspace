@@ -155,3 +155,11 @@ uint16_t get_tapping_term(uint16_t keycode, keyrecord_t *record) {
     return TAPPING_TERM;
 #endif
 }
+
+#ifdef CONSOLE_ENABLE
+void keyboard_post_init_user(void) {
+    debug_enable = true;
+    debug_matrix = true;   // 物理的なスイッチの反応を見る
+    debug_keyboard = true; // QMKの論理的なイベントを見る
+}
+#endif
