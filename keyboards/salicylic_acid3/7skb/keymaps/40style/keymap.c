@@ -92,32 +92,51 @@ layer_state_t layer_state_set_user(layer_state_t state) {
 return state;
 }
 
-int RGB_current_mode;
-bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-  bool result = false;
-  switch (keycode) {
-    #ifdef RGBLIGHT_ENABLE
-      case QK_UNDERGLOW_MODE_NEXT:
-          if (record->event.pressed) {
-            rgblight_mode(RGB_current_mode);
-            rgblight_step();
-            RGB_current_mode = rgblight_config.mode;
-          }
-        break;
-      case RGB_RST:
-          if (record->event.pressed) {
-            eeconfig_update_rgblight_default();
-            rgblight_enable();
-            RGB_current_mode = rgblight_config.mode;
-          }
-        break;
-    #endif
-    default:
-      result = true;
-      break;
-  }
+// 状態を保持するためのグローバル変数
+static uint16_t pending_retro_key = KC_NO;
+static bool retro_interrupted = false;
 
-  return result;
+// 【ステップ1】押された瞬間の監視（割り込みの検知）
+bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    if (record->event.pressed) {
+        // 押されたキーが MT (Mod-Tap) または LT (Layer-Tap) の範囲か判定
+        bool is_dual_role = (keycode >= QK_MOD_TAP && keycode <= QK_MOD_TAP_MAX) ||
+                            (keycode >= QK_LAYER_TAP && keycode <= QK_LAYER_TAP_MAX);
+
+        if (is_dual_role) {
+            // MT/LT が押されたらターゲットとして記憶し、割り込みフラグをリセット
+            pending_retro_key = keycode;
+            retro_interrupted = false;
+        } else {
+            // それ以外の普通のキーが押されたら「割り込みあり」と判定
+            retro_interrupted = true;
+        }
+    }
+
+    // QMK本家の通常処理（レイヤー切り替えやShiftの適用など）はそのまま生かす
+    return true;
+}
+
+// 【ステップ2】離された瞬間の処理（タップの強制注入）
+void post_process_record_user(uint16_t keycode, keyrecord_t *record) {
+    // キーが離された時
+    if (!record->event.pressed) {
+        if (keycode == pending_retro_key) {
+            // QMKの標準仕様：tap.count == 0 なら「TAPPING_TERMを超過した（長押し判定された）」という意味
+            if (!retro_interrupted && record->tap.count == 0) {
+
+                // 本家処理が終わっているので、Layer/Mod はすでにお行儀よく解除されている。
+                // ここで、キーコードの「下位8ビット（ベースとなるキーコード）」だけを抽出する。
+                // 例: LT(1, KC_MINS) -> KC_MINS に変換される
+                uint16_t base_kc = keycode & 0xFF;
+
+                // 抽出したベースキーをタップ！（親指Shiftが生きていれば、自動で反映される）
+                tap_code16(base_kc);
+            }
+            // 処理が終わったらターゲットをクリア
+            pending_retro_key = KC_NO;
+        }
+    }
 }
 
 #ifdef DYNAMIC_TAPPING_TERM_ENABLE
