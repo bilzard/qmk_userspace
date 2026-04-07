@@ -175,10 +175,52 @@ uint16_t get_tapping_term(uint16_t keycode, keyrecord_t *record) {
 #endif
 }
 
-#ifdef CONSOLE_ENABLE
+#ifdef MY_DEBUG
 void keyboard_post_init_user(void) {
     debug_enable = true;
     debug_matrix = true;   // 物理的なスイッチの反応を見る
     debug_keyboard = true; // QMKの論理的なイベントを見る
+}
+#endif
+
+#ifdef MY_ANALYSIS
+#include "print.h"
+
+// 前回のマトリックス状態を保持する配列
+static matrix_row_t previous_matrix[MATRIX_ROWS] = {0};
+
+void matrix_scan_user(void) {
+    // --- 既存の matrix_scan_user の処理があればここに残す ---
+
+    // 全ての行（Row）をスキャン
+    for (uint8_t r = 0; r < MATRIX_ROWS; r++) {
+        // 現在の行の物理的な状態（ビットマスク）を取得
+        matrix_row_t current_row = matrix_get_row(r);
+
+        // 前回との状態の差分（XOR）を計算
+        matrix_row_t changed_bits = current_row ^ previous_matrix[r];
+
+        // いずれかのキーに変化があった場合のみ処理
+        if (changed_bits) {
+            // 現在のマイコンの起動からの経過時間（ミリ秒・32bit）を取得
+            uint32_t now = timer_read32();
+
+            // どの列（Col）に変化があったかを特定
+            for (uint8_t c = 0; c < MATRIX_COLS; c++) {
+                // その列のビットが変化していた場合
+                if (changed_bits & (1 << c)) {
+                    // 現在のビットが立っていればPush、落ちていればRelease
+                    bool is_pressed = (current_row & (1 << c)) != 0;
+
+                    // Python等でパースしやすいフォーマットでコンソール出力
+                    // 例: [00123456] R1,C2: Push
+                    uprintf("[%08lu] R%d,C%d: %s\n",
+                            now, r, c, is_pressed ? "Push" : "Release");
+                }
+            }
+            // 状態を更新
+            previous_matrix[r] = current_row;
+        }
+    }
 }
 #endif
