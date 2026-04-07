@@ -99,9 +99,7 @@ return state;
 
 #include "print.h"
 
-// --- デバッグログのON/OFFスイッチ (1:ON, 0:OFF) ---
 #define DEBUG_SVM 1
-
 #define MAX_ACTIVE_TH 8
 #define SVM_BUF_SIZE 32
 
@@ -114,12 +112,14 @@ typedef struct {
 
 svm_config_t get_svm_params(uint16_t tap_kc) {
     switch (tap_kc) {
-        case KC_SPC:
-        case KC_BSPC:
-        case KC_ENT:
+        case KC_SPC: case KC_BSPC: case KC_ENT:
             return (svm_config_t){1710, -338, -217148, 250};
+        // ホームポジション用の緩い設定（ロールオーバー対策）
+        case KC_A: case KC_S: case KC_D: case KC_F:
+        case KC_J: case KC_K: case KC_L: case KC_SCLN:
+            return (svm_config_t){1710, -338, -280000, 250};
         default:
-            return (svm_config_t){1710, -338, -217148, 250};
+            return (svm_config_t){1710, -338, -250000, 250};
     }
 }
 
@@ -137,18 +137,6 @@ static keyrecord_t event_buffer[SVM_BUF_SIZE];
 static uint8_t buf_count = 0;
 static bool is_replaying = false;
 
-// 状態のデバッグ出力
-void dump_svm_instances(void) {
-    if (!DEBUG_SVM) return;
-    uprintf("SVM INSTANCES:\n");
-    for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
-        if (!th_instances[i].active) continue;
-        uprintf(" [%d]: Key:0x%04X, State:%d, Combined:%d, TimerEl:%u, Interval:%u\n",
-            i, th_instances[i].keycode, th_instances[i].state, th_instances[i].combined,
-            timer_elapsed(th_instances[i].timer), th_instances[i].interval);
-    }
-}
-
 bool is_any_th_waiting(void) {
     for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++)
         if (th_instances[i].active && th_instances[i].state == ST_WAITING) return true;
@@ -158,26 +146,22 @@ bool is_any_th_waiting(void) {
 void replay_buffer(void) {
     if (is_replaying || is_any_th_waiting()) return;
     is_replaying = true;
-    if (buf_count > 0 && DEBUG_SVM) {
-        uprintf("SVM: Replaying %d events\n", buf_count);
-    }
-    for (uint8_t i = 0; i < buf_count; i++) {
-        // 【修正】keycodeではなく、rowとcol（行列の物理位置）を出力する
-        if (DEBUG_SVM) uprintf("SVM:   Replay Event [Col:%d Row:%d], Pressed:%d\n",
-                               event_buffer[i].event.key.col,
-                               event_buffer[i].event.key.row,
-                               event_buffer[i].event.pressed);
-        process_record(&event_buffer[i]);
-    }
+    if (buf_count > 0 && DEBUG_SVM) uprintf("SVM: Replaying %d events\n", buf_count);
+    for (uint8_t i = 0; i < buf_count; i++) process_record(&event_buffer[i]);
     buf_count = 0;
     is_replaying = false;
 }
 
+// 【修正1】修飾キーの送信をQMK標準の register_code16 に変更（OSとの通信を確実にする）
 void execute_dynamic_hold(uint16_t keycode, bool pressed) {
     if (IS_QK_MOD_TAP(keycode)) {
-        uint8_t mods = (keycode >> 8) & 0x1F;
-        if (pressed) add_mods(mods); else del_mods(mods);
-        send_keyboard_report();
+        uint8_t mod_code = (keycode >> 8) & 0x1F;
+        bool is_right = mod_code & 0x10; // 右側の修飾キーか判定
+
+        if (mod_code & 0x01) { if (pressed) register_code16(is_right ? KC_RCTL : KC_LCTL); else unregister_code16(is_right ? KC_RCTL : KC_LCTL); }
+        if (mod_code & 0x02) { if (pressed) register_code16(is_right ? KC_RSFT : KC_LSFT); else unregister_code16(is_right ? KC_RSFT : KC_LSFT); }
+        if (mod_code & 0x04) { if (pressed) register_code16(is_right ? KC_RALT : KC_LALT); else unregister_code16(is_right ? KC_RALT : KC_LALT); }
+        if (mod_code & 0x08) { if (pressed) register_code16(is_right ? KC_RGUI : KC_LGUI); else unregister_code16(is_right ? KC_RGUI : KC_LGUI); }
     } else if (IS_QK_LAYER_TAP(keycode)) {
         uint8_t layer = (keycode >> 8) & 0x0F;
         if (pressed) layer_on(layer); else layer_off(layer);
@@ -191,60 +175,57 @@ void settle_instance(uint8_t inst_idx, bool as_hold) {
     if (as_hold) {
         inst->state = ST_HOLDING;
         execute_dynamic_hold(inst->keycode, true);
-        if (DEBUG_SVM) uprintf("SVM: Fixed as HOLD [Key:0x%04X, TapKC:0x%02X]\n", inst->keycode, tap_kc);
+        if (DEBUG_SVM) uprintf("SVM: Fixed as HOLD [Key:0x%04X]\n", inst->keycode);
     } else {
         tap_code16(tap_kc);
         inst->active = false;
-        if (DEBUG_SVM) uprintf("SVM: Fixed as TAP [Key:0x%04X, TapKC:0x%02X]\n", inst->keycode, tap_kc);
+        if (DEBUG_SVM) uprintf("SVM: Fixed as TAP [Key:0x%04X]\n", inst->keycode);
     }
     replay_buffer();
 }
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-    // 戻り値がfalseの場合にデバッグ情報を出す
-    bool final_result = true;
-
     if (is_replaying) return true;
 
-    // --- 1. 最優先：既存T&Hキーのフラグ更新 ---
     if (record->event.pressed) {
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
             if (th_instances[i].active && th_instances[i].keycode != keycode) {
                 if (th_instances[i].state == ST_WAITING || th_instances[i].state == ST_HOLDING) {
                     th_instances[i].combined = true;
                     if (th_instances[i].state == ST_WAITING && th_instances[i].interval == 0) {
-                        th_instances[i].interval = timer_elapsed(th_instances[i].timer);
-                        if (DEBUG_SVM) uprintf("SVM: Combined flag set (Y locked at %u ms) for Key:0x%04X by Key:0x%04X\n", th_instances[i].interval, th_instances[i].keycode, keycode);
-                    } else {
-                        if (DEBUG_SVM) uprintf("SVM: Combined flag set for Key:0x%04X by Key:0x%04X (state:%d)\n", th_instances[i].keycode, keycode, th_instances[i].state);
+                        uint16_t y = timer_elapsed(th_instances[i].timer);
+                        th_instances[i].interval = y;
+                        if (DEBUG_SVM) uprintf("SVM: Y locked at %u ms for Key:0x%04X\n", y, th_instances[i].keycode);
+
+                        // 【修正2】アーリーセトル（早期確定）：間隔(Y)が十分に長いなら、即座にHold確定！
+                        svm_config_t params = get_svm_params(th_instances[i].keycode & 0xFF);
+                        int32_t early_score = params.w_x * y + params.w_y * y + params.b;
+                        if (early_score > 0) {
+                            if (DEBUG_SVM) uprintf("SVM: Early Settle! Y=%u is long enough for HOLD.\n", y);
+                            settle_instance(i, true);
+                        }
                     }
                 }
             }
         }
     }
 
-    // --- 2. 既存T&Hキーのリリース（解放）処理 ---
     if (!record->event.pressed) {
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
             if (th_instances[i].active && th_instances[i].keycode == keycode) {
                 th_instance_t *inst = &th_instances[i];
                 uint16_t tap_kc = keycode & 0xFF;
-                svm_config_t params = get_svm_params(tap_kc);
 
                 if (inst->state == ST_WAITING) {
                     uint16_t x = timer_elapsed(inst->timer);
                     uint16_t y = (inst->interval > 0) ? inst->interval : x;
+                    svm_config_t params = get_svm_params(tap_kc);
                     int32_t score = params.w_x * x + params.w_y * y + params.b;
 
-                    if (DEBUG_SVM) {
-                        uprintf("SVM: Released. Calc Score=%ld, X:%u, Y:%u, TapKC:0x%02X, Combined:%d\n", (long)score, x, y, tap_kc, inst->combined);
-                        // もし誤判定の可能性があるならパラメータも出す
-                        uprintf("     Params: w_x:%ld, w_y:%ld, b:%ld, guard:%d\n", (long)params.w_x, (long)params.w_y, (long)params.b, params.guard);
-                    }
+                    if (DEBUG_SVM) uprintf("SVM: Released. Score=%ld, X:%u, Y:%u, Combined:%d\n", (long)score, x, y, inst->combined);
 
                     if (score > 0) {
-                        if (!inst->combined) { // 組み合わせなし(単推し遅延)はTapで救済
-                            if (DEBUG_SVM) uprintf("SVM: Score>0 but NO combo. Retro Tap [Key:0x%04X, TapKC:0x%02X]\n", keycode, tap_kc);
+                        if (!inst->combined) {
                             tap_code16(tap_kc);
                             inst->active = false;
                             replay_buffer();
@@ -252,42 +233,32 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                             settle_instance(i, true);
                             inst->state = ST_RELEASING;
                             inst->timer = timer_read();
-                            if (DEBUG_SVM) uprintf("SVM: -> RELEASING phase\n");
                         }
                     } else {
                         settle_instance(i, false);
                     }
                 } else if (inst->state == ST_HOLDING) {
-                    if (!inst->combined) { // 強制Hold後のレトロタップ
-                        if (DEBUG_SVM) uprintf("SVM: Held but NO combo. Retro Tap [Key:0x%04X, TapKC:0x%02X]\n", keycode, tap_kc);
+                    if (!inst->combined) {
                         execute_dynamic_hold(keycode, false);
                         tap_code16(tap_kc);
                         inst->active = false;
                     } else {
                         inst->state = ST_RELEASING;
                         inst->timer = timer_read();
-                        if (DEBUG_SVM) uprintf("SVM: -> RELEASING phase\n");
                     }
                 }
-                final_result = false;
-                goto exit_and_log;
+                return false;
             }
         }
     }
 
-    // --- 3. 待機中キーがある場合は、すべての後続イベントをバッファリング ---
     if (is_any_th_waiting()) {
         if (buf_count < SVM_BUF_SIZE) {
             event_buffer[buf_count++] = *record;
-            if (DEBUG_SVM) uprintf("SVM: Buffered key:0x%04X (count=%d)\n", keycode, buf_count);
-            final_result = false;
-            goto exit_and_log;
-        } else {
-            if (DEBUG_SVM) uprintf("SVM: Buffer overflow! Bypassing Key:0x%04X\n", keycode);
+            return false;
         }
     }
 
-    // --- 4. バッファリングされなかった新規MT/LTキーのフック ---
     if (record->event.pressed && (IS_QK_MOD_TAP(keycode) || IS_QK_LAYER_TAP(keycode))) {
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
             if (!th_instances[i].active) {
@@ -295,43 +266,31 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                     .keycode = keycode, .timer = timer_read(),
                     .interval = 0, .active = true, .combined = false, .state = ST_WAITING
                 };
-                if (DEBUG_SVM) uprintf("SVM: START WAITING Key:0x%04X [TapKC:0x%02X]\n", keycode, keycode & 0xFF);
-                final_result = false;
-                goto exit_and_log;
+                if (DEBUG_SVM) uprintf("SVM: START WAITING Key:0x%04X\n", keycode);
+                return false;
             }
         }
     }
 
     return true;
-
-exit_and_log:
-    if (!final_result && DEBUG_SVM) {
-        // 何か異常がある場合はダンプ
-        if (timer_elapsed(timer_read()) > 50) { // 極端な遅延がある場合など
-             uprintf("SVM Error/Delay detected. DUMPING STATES.\n");
-             dump_svm_instances();
-        }
-    }
-    return final_result;
 }
 
 void matrix_scan_user(void) {
     for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
         if (!th_instances[i].active) continue;
 
-        uint16_t tap_kc = th_instances[i].keycode & 0xFF;
-        svm_config_t params = get_svm_params(tap_kc);
-
         if (th_instances[i].state == ST_WAITING) {
+            svm_config_t params = get_svm_params(th_instances[i].keycode & 0xFF);
             if (timer_elapsed(th_instances[i].timer) > params.guard) {
-                if (DEBUG_SVM) uprintf("SVM: Guard Timeout! Forcing HOLD [Key:0x%04X, TapKC:0x%02X]\n", th_instances[i].keycode, tap_kc);
+                if (DEBUG_SVM) uprintf("SVM: Guard Timeout! Forcing HOLD [Key:0x%04X]\n", th_instances[i].keycode);
                 settle_instance(i, true);
             }
         } else if (th_instances[i].state == ST_RELEASING) {
-            if (timer_elapsed(th_instances[i].timer) > 5) {
+            // 【修正3】OSが確実に取りこぼさないよう、リリースまでの猶予を30msに延長
+            if (timer_elapsed(th_instances[i].timer) > 30) {
                 execute_dynamic_hold(th_instances[i].keycode, false);
                 th_instances[i].active = false;
-                if (DEBUG_SVM) uprintf("SVM: Hold Released cleanly [Key:0x%04X, TapKC:0x%02X]\n", th_instances[i].keycode, tap_kc);
+                if (DEBUG_SVM) uprintf("SVM: Hold Released cleanly [Key:0x%04X]\n", th_instances[i].keycode);
             }
         }
     }
