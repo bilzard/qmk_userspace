@@ -99,7 +99,9 @@ return state;
 
 #include "print.h"
 
+// --- デバッグログのON/OFFスイッチ (1:ON, 0:OFF) ---
 #define DEBUG_SVM 1
+
 #define MAX_ACTIVE_TH 8
 #define SVM_BUF_SIZE 32
 
@@ -114,7 +116,6 @@ svm_config_t get_svm_params(uint16_t tap_kc) {
     switch (tap_kc) {
         case KC_SPC: case KC_BSPC: case KC_ENT:
             return (svm_config_t){1710, -338, -217148, 250};
-        // ホームポジション用の緩い設定（ロールオーバー対策）
         case KC_A: case KC_S: case KC_D: case KC_F:
         case KC_J: case KC_K: case KC_L: case KC_SCLN:
             return (svm_config_t){1710, -338, -350000, 250};
@@ -137,6 +138,18 @@ static keyrecord_t event_buffer[SVM_BUF_SIZE];
 static uint8_t buf_count = 0;
 static bool is_replaying = false;
 
+// 【新規追加】指定したキーの「押下（Press）」がバッファ内に存在するかチェックする
+bool is_press_buffered(uint8_t col, uint8_t row) {
+    for (uint8_t i = 0; i < buf_count; i++) {
+        if (event_buffer[i].event.key.col == col &&
+            event_buffer[i].event.key.row == row &&
+            event_buffer[i].event.pressed) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool is_any_th_waiting(void) {
     for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++)
         if (th_instances[i].active && th_instances[i].state == ST_WAITING) return true;
@@ -146,17 +159,24 @@ bool is_any_th_waiting(void) {
 void replay_buffer(void) {
     if (is_replaying || is_any_th_waiting()) return;
     is_replaying = true;
-    if (buf_count > 0 && DEBUG_SVM) uprintf("SVM: Replaying %d events\n", buf_count);
-    for (uint8_t i = 0; i < buf_count; i++) process_record(&event_buffer[i]);
+    if (buf_count > 0 && DEBUG_SVM) {
+        uprintf("SVM: Replaying %d events\n", buf_count);
+    }
+    for (uint8_t i = 0; i < buf_count; i++) {
+        if (DEBUG_SVM) uprintf("SVM:   Replay Event [Col:%d Row:%d], Pressed:%d\n",
+                               event_buffer[i].event.key.col,
+                               event_buffer[i].event.key.row,
+                               event_buffer[i].event.pressed);
+        process_record(&event_buffer[i]);
+    }
     buf_count = 0;
     is_replaying = false;
 }
 
-// 【修正1】修飾キーの送信をQMK標準の register_code16 に変更（OSとの通信を確実にする）
 void execute_dynamic_hold(uint16_t keycode, bool pressed) {
     if (IS_QK_MOD_TAP(keycode)) {
         uint8_t mod_code = (keycode >> 8) & 0x1F;
-        bool is_right = mod_code & 0x10; // 右側の修飾キーか判定
+        bool is_right = mod_code & 0x10;
 
         if (mod_code & 0x01) { if (pressed) register_code16(is_right ? KC_RCTL : KC_LCTL); else unregister_code16(is_right ? KC_RCTL : KC_LCTL); }
         if (mod_code & 0x02) { if (pressed) register_code16(is_right ? KC_RSFT : KC_LSFT); else unregister_code16(is_right ? KC_RSFT : KC_LSFT); }
@@ -175,17 +195,29 @@ void settle_instance(uint8_t inst_idx, bool as_hold) {
     if (as_hold) {
         inst->state = ST_HOLDING;
         execute_dynamic_hold(inst->keycode, true);
-        if (DEBUG_SVM) uprintf("SVM: Fixed as HOLD [Key:0x%04X]\n", inst->keycode);
+        if (DEBUG_SVM) uprintf("SVM: Fixed as HOLD [Key:0x%04X, TapKC:0x%02X]\n", inst->keycode, tap_kc);
+        replay_buffer();
     } else {
-        tap_code16(tap_kc);
+        register_code16(tap_kc);
         inst->active = false;
-        if (DEBUG_SVM) uprintf("SVM: Fixed as TAP [Key:0x%04X]\n", inst->keycode);
+        if (DEBUG_SVM) uprintf("SVM: Fixed as TAP [Key:0x%04X, TapKC:0x%02X]\n", inst->keycode, tap_kc);
+        replay_buffer();
+        unregister_code16(tap_kc);
     }
-    replay_buffer();
 }
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-    if (is_replaying) return true;
+    bool final_result = true;
+
+    if (is_replaying) {
+        if (IS_QK_MOD_TAP(keycode) || IS_QK_LAYER_TAP(keycode)) {
+            uint16_t tap_kc = keycode & 0xFF;
+            if (record->event.pressed) register_code16(tap_kc);
+            else unregister_code16(tap_kc);
+            return false;
+        }
+        return true;
+    }
 
     if (record->event.pressed) {
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
@@ -197,7 +229,6 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                         th_instances[i].interval = y;
                         if (DEBUG_SVM) uprintf("SVM: Y locked at %u ms for Key:0x%04X\n", y, th_instances[i].keycode);
 
-                        // 【修正2】アーリーセトル（早期確定）：間隔(Y)が十分に長いなら、即座にHold確定！
                         svm_config_t params = get_svm_params(th_instances[i].keycode & 0xFF);
                         int32_t early_score = params.w_x * y + params.w_y * y + params.b;
                         if (early_score > 0) {
@@ -215,20 +246,19 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
             if (th_instances[i].active && th_instances[i].keycode == keycode) {
                 th_instance_t *inst = &th_instances[i];
                 uint16_t tap_kc = keycode & 0xFF;
+                svm_config_t params = get_svm_params(tap_kc);
 
                 if (inst->state == ST_WAITING) {
                     uint16_t x = timer_elapsed(inst->timer);
                     uint16_t y = (inst->interval > 0) ? inst->interval : x;
-                    svm_config_t params = get_svm_params(tap_kc);
                     int32_t score = params.w_x * x + params.w_y * y + params.b;
-
-                    if (DEBUG_SVM) uprintf("SVM: Released. Score=%ld, X:%u, Y:%u, Combined:%d\n", (long)score, x, y, inst->combined);
 
                     if (score > 0) {
                         if (!inst->combined) {
-                            tap_code16(tap_kc);
+                            register_code16(tap_kc);
                             inst->active = false;
                             replay_buffer();
+                            unregister_code16(tap_kc);
                         } else {
                             settle_instance(i, true);
                             inst->state = ST_RELEASING;
@@ -240,22 +270,35 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                 } else if (inst->state == ST_HOLDING) {
                     if (!inst->combined) {
                         execute_dynamic_hold(keycode, false);
-                        tap_code16(tap_kc);
+                        register_code16(tap_kc);
                         inst->active = false;
+                        replay_buffer();
+                        unregister_code16(tap_kc);
                     } else {
                         inst->state = ST_RELEASING;
                         inst->timer = timer_read();
                     }
                 }
-                return false;
+                final_result = false;
+                goto exit_and_log;
             }
         }
     }
 
     if (is_any_th_waiting()) {
-        if (buf_count < SVM_BUF_SIZE) {
-            event_buffer[buf_count++] = *record;
-            return false;
+        // 【究極の修正】Pressイベント、またはバッファ内にPressが存在するReleaseイベントのみバッファリングする
+        if (record->event.pressed || is_press_buffered(record->event.key.col, record->event.key.row)) {
+            if (buf_count < SVM_BUF_SIZE) {
+                event_buffer[buf_count++] = *record;
+                if (DEBUG_SVM) uprintf("SVM: Buffered Col:%d Row:%d Pressed:%d (count=%d)\n", record->event.key.col, record->event.key.row, record->event.pressed, buf_count);
+                final_result = false;
+                goto exit_and_log;
+            } else {
+                if (DEBUG_SVM) uprintf("SVM: Buffer overflow! Bypassing Key\n");
+            }
+        } else {
+            // バッファに関係ないキーのリリースは即座に通してOSのキーリピート暴発を防ぐ
+            if (DEBUG_SVM) uprintf("SVM: Bypassed buffer for Release Col:%d Row:%d\n", record->event.key.col, record->event.key.row);
         }
     }
 
@@ -267,12 +310,23 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                     .interval = 0, .active = true, .combined = false, .state = ST_WAITING
                 };
                 if (DEBUG_SVM) uprintf("SVM: START WAITING Key:0x%04X\n", keycode);
-                return false;
+                final_result = false;
+                goto exit_and_log;
             }
         }
     }
 
-    return true;
+    if (!record->event.pressed && (IS_QK_MOD_TAP(keycode) || IS_QK_LAYER_TAP(keycode))) {
+         uint16_t tap_kc = keycode & 0xFF;
+         unregister_code16(tap_kc);
+         final_result = false;
+         goto exit_and_log;
+    }
+
+    return final_result;
+
+exit_and_log:
+    return final_result;
 }
 
 void matrix_scan_user(void) {
@@ -286,7 +340,6 @@ void matrix_scan_user(void) {
                 settle_instance(i, true);
             }
         } else if (th_instances[i].state == ST_RELEASING) {
-            // 【修正3】OSが確実に取りこぼさないよう、リリースまでの猶予を30msに延長
             if (timer_elapsed(th_instances[i].timer) > 30) {
                 execute_dynamic_hold(th_instances[i].keycode, false);
                 th_instances[i].active = false;
