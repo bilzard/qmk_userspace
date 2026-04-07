@@ -118,9 +118,9 @@ svm_config_t get_svm_params(uint16_t tap_kc) {
             return (svm_config_t){1710, -338, -217148, 250};
         case KC_A: case KC_S: case KC_D: case KC_F:
         case KC_J: case KC_K: case KC_L: case KC_SCLN:
-            return (svm_config_t){1710, -338, -350000, 250};
+            return (svm_config_t){1000, 0, -250000, 250};
         default:
-            return (svm_config_t){1710, -338, -250000, 250};
+            return (svm_config_t){1000, 0, -200000, 200};
     }
 }
 
@@ -333,17 +333,24 @@ void matrix_scan_user(void) {
     for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
         if (!th_instances[i].active) continue;
 
-        if (th_instances[i].state == ST_WAITING) {
-            svm_config_t params = get_svm_params(th_instances[i].keycode & 0xFF);
-            if (timer_elapsed(th_instances[i].timer) > params.guard) {
-                if (DEBUG_SVM) uprintf("SVM: Guard Timeout! Forcing HOLD [Key:0x%04X]\n", th_instances[i].keycode);
+        th_instance_t *inst = &th_instances[i];
+        if (inst->state == ST_WAITING) {
+            uint16_t x = timer_elapsed(inst->timer);
+            uint16_t y = (inst->interval > 0) ? inst->interval : x;
+            svm_config_t params = get_svm_params(inst->keycode & 0xFF);
+            int32_t score = params.w_x * x + params.w_y * y + params.b;
+
+            // スコアが0を超えた（250ms経過した）瞬間にHold確定
+            if (score > 0) {
+                if (DEBUG_SVM) uprintf("SVM: Threshold reached! HOLD [Key:0x%04X]\n", inst->keycode);
                 settle_instance(i, true);
             }
-        } else if (th_instances[i].state == ST_RELEASING) {
-            if (timer_elapsed(th_instances[i].timer) > 30) {
-                execute_dynamic_hold(th_instances[i].keycode, false);
-                th_instances[i].active = false;
-                if (DEBUG_SVM) uprintf("SVM: Hold Released cleanly [Key:0x%04X]\n", th_instances[i].keycode);
+        }
+        // (RELEASINGフェーズの処理はそのまま)
+        else if (inst->state == ST_RELEASING) {
+            if (timer_elapsed(inst->timer) > 30) {
+                execute_dynamic_hold(inst->keycode, false);
+                inst->active = false;
             }
         }
     }
