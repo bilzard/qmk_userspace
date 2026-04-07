@@ -117,7 +117,7 @@ svm_config_t get_svm_params(uint16_t tap_kc) {
         // ホームポジション用の緩い設定（ロールオーバー対策）
         case KC_A: case KC_S: case KC_D: case KC_F:
         case KC_J: case KC_K: case KC_L: case KC_SCLN:
-            return (svm_config_t){1710, -338, -280000, 250};
+            return (svm_config_t){1710, -338, -350000, 250};
         default:
             return (svm_config_t){1710, -338, -250000, 250};
     }
