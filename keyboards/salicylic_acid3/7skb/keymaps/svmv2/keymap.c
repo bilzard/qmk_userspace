@@ -104,6 +104,7 @@ return state;
 
 #define MAX_ACTIVE_TH 8
 #define SVM_BUF_SIZE 32
+#define MAX_COMBO_COUNT 2 // n文字以上打たれたらHold確定
 
 typedef struct {
     int32_t w_x;
@@ -130,6 +131,7 @@ typedef struct {
     uint16_t interval;
     bool     active;
     bool     combined;
+    uint8_t  combo_count;
     enum { ST_WAITING, ST_HOLDING, ST_RELEASING } state;
 } th_instance_t;
 
@@ -219,13 +221,17 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         return true;
     }
 
+    // -- 1. フラグ更新 --
     if (record->event.pressed) {
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
             if (th_instances[i].active && th_instances[i].keycode != keycode) {
                 if (th_instances[i].state == ST_WAITING || th_instances[i].state == ST_HOLDING) {
                     th_instances[i].combined = true;
+                    th_instances[i].combo_count++;
+
                     if (th_instances[i].state == ST_WAITING && th_instances[i].interval == 0) {
                         uint16_t y = timer_elapsed(th_instances[i].timer);
+                        // early settlement
                         th_instances[i].interval = y;
                         if (DEBUG_SVM) uprintf("SVM: Y locked at %u ms for Key:0x%04X\n", y, th_instances[i].keycode);
 
@@ -234,6 +240,12 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                         if (early_score > 0) {
                             if (DEBUG_SVM) uprintf("SVM: Early Settle! Y=%u is long enough for HOLD.\n", y);
                             settle_instance(i, true);
+                            continue;
+                        }
+
+                        // hold with n combo: n文字以上打たれたら問答無用でHold確定
+                        if (th_instances[i].combo_count >= MAX_COMBO_COUNT) {
+                            settle_instance(i, true);
                         }
                     }
                 }
@@ -241,6 +253,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         }
     }
 
+    // -- 2. リリース処理 --
     if (!record->event.pressed) {
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
             if (th_instances[i].active && th_instances[i].keycode == keycode) {
@@ -285,6 +298,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         }
     }
 
+    // --- 3. バッファリング ---
     if (is_any_th_waiting()) {
         // 【究極の修正】Pressイベント、またはバッファ内にPressが存在するReleaseイベントのみバッファリングする
         if (record->event.pressed || is_press_buffered(record->event.key.col, record->event.key.row)) {
@@ -302,12 +316,14 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         }
     }
 
+    // -- 4. 新規T&Hフック --
     if (record->event.pressed && (IS_QK_MOD_TAP(keycode) || IS_QK_LAYER_TAP(keycode))) {
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
             if (!th_instances[i].active) {
                 th_instances[i] = (th_instance_t){
                     .keycode = keycode, .timer = timer_read(),
-                    .interval = 0, .active = true, .combined = false, .state = ST_WAITING
+                    .interval = 0, .active = true, .combined = false, .state = ST_WAITING,
+                    .combo_count = 0
                 };
                 if (DEBUG_SVM) uprintf("SVM: START WAITING Key:0x%04X\n", keycode);
                 final_result = false;
@@ -316,11 +332,12 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         }
     }
 
+    // -- 5. T&Hキーのフォールバック・リリース処理 --
     if (!record->event.pressed && (IS_QK_MOD_TAP(keycode) || IS_QK_LAYER_TAP(keycode))) {
-         uint16_t tap_kc = keycode & 0xFF;
-         unregister_code16(tap_kc);
-         final_result = false;
-         goto exit_and_log;
+        uint16_t tap_kc = keycode & 0xFF;
+        unregister_code16(tap_kc);
+        final_result = false;
+        goto exit_and_log;
     }
 
     return final_result;
