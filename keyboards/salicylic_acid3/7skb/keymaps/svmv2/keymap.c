@@ -18,11 +18,6 @@ enum layer_number {
 };
 
 enum custom_keycodes {
-    // --- 1. RemapのGUIから操作したいカスタムキー (USER枠を使う) ---
-    MY_SPC = 0x7E00, // Kb 0に割り当てるスペースキー（T&H判定の対象）
-
-    // --- 2. GUI操作は不要だが、コード内で定義が必要なもの (SAFE_RANGEを使う) ---
-    // RGB_RST は SAFE_RANGE のあとに自動で連番が振られるようにする
     RGB_RST = SAFE_RANGE,
 };
 
@@ -212,8 +207,6 @@ void settle_instance(uint8_t inst_idx, bool as_hold) {
 }
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-    bool final_result = true;
-
     if (is_replaying) {
         if (IS_QK_MOD_TAP(keycode) || IS_QK_LAYER_TAP(keycode)) {
             uint16_t tap_kc = keycode & 0xFF;
@@ -295,8 +288,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                         inst->timer = timer_read();
                     }
                 }
-                final_result = false;
-                goto exit_and_log;
+                return false;
             }
         }
     }
@@ -308,8 +300,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
             if (buf_count < SVM_BUF_SIZE) {
                 event_buffer[buf_count++] = *record;
                 if (DEBUG_SVM) uprintf("SVM: Buffered Col:%d Row:%d Pressed:%d (count=%d)\n", record->event.key.col, record->event.key.row, record->event.pressed, buf_count);
-                final_result = false;
-                goto exit_and_log;
+                return false;
             } else {
                 if (DEBUG_SVM) uprintf("SVM: Buffer overflow! Bypassing Key\n");
             }
@@ -329,8 +320,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                     .combo_count = 0
                 };
                 if (DEBUG_SVM) uprintf("SVM: START WAITING Key:0x%04X\n", keycode);
-                final_result = false;
-                goto exit_and_log;
+                return false;
             }
         }
     }
@@ -339,14 +329,10 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if (!record->event.pressed && (IS_QK_MOD_TAP(keycode) || IS_QK_LAYER_TAP(keycode))) {
         uint16_t tap_kc = keycode & 0xFF;
         unregister_code16(tap_kc);
-        final_result = false;
-        goto exit_and_log;
+        return false;
     }
 
-    return final_result;
-
-exit_and_log:
-    return final_result;
+    return true;
 }
 
 void matrix_scan_user(void) {
@@ -363,6 +349,11 @@ void matrix_scan_user(void) {
             // スコアが0を超えた（250ms経過した）瞬間にHold確定
             if (score > 0) {
                 if (DEBUG_SVM) uprintf("SVM: Threshold reached! HOLD [Key:0x%04X]\n", inst->keycode);
+                settle_instance(i, true);
+            }
+            // 2. 【最大待ち時間のフェイルセーフ】SVMスコアが満たされなくても、guardを超えたら強制Hold
+            else if (x > params.guard && !inst->combined) {
+                if (DEBUG_SVM) uprintf("SVM: Guard timeout! Force HOLD [Key:0x%04X]\n", inst->keycode);
                 settle_instance(i, true);
             }
         }
