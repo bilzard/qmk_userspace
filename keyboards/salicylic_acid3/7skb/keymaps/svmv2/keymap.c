@@ -159,18 +159,14 @@ bool is_any_th_waiting(void) {
 void replay_buffer(void) {
     if (is_replaying || is_any_th_waiting()) return;
     is_replaying = true;
-    #ifdef DEBUG_SVM
-    if (buf_count > 0) {
+    if (buf_count > 0 && DEBUG_SVM) {
         uprintf("SVM: Replaying %d events\n", buf_count);
     }
-    #endif
     for (uint8_t i = 0; i < buf_count; i++) {
-        #ifdef DEBUG_SVM
-        uprintf("SVM:   Replay Event [Col:%d Row:%d], Pressed:%d\n",
+        if (DEBUG_SVM) uprintf("SVM:   Replay Event [Col:%d Row:%d], Pressed:%d\n",
                                event_buffer[i].event.key.col,
                                event_buffer[i].event.key.row,
                                event_buffer[i].event.pressed);
-        #endif
         process_record(&event_buffer[i]);
     }
     buf_count = 0;
@@ -199,16 +195,12 @@ void settle_instance(uint8_t inst_idx, bool as_hold) {
     if (as_hold) {
         inst->state = ST_HOLDING;
         execute_dynamic_hold(inst->keycode, true);
-        #ifdef DEBUG_SVM
-        uprintf("SVM: Fixed as HOLD [Key:0x%04X, TapKC:0x%02X]\n", inst->keycode, tap_kc);
-        #endif
+        if (DEBUG_SVM) uprintf("SVM: Fixed as HOLD [Key:0x%04X, TapKC:0x%02X]\n", inst->keycode, tap_kc);
         replay_buffer();
     } else {
         register_code16(tap_kc);
         inst->active = false;
-        #ifdef DEBUG_SVM
-        uprintf("SVM: Fixed as TAP [Key:0x%04X, TapKC:0x%02X]\n", inst->keycode, tap_kc);
-        #endif
+        if (DEBUG_SVM) uprintf("SVM: Fixed as TAP [Key:0x%04X, TapKC:0x%02X]\n", inst->keycode, tap_kc);
         replay_buffer();
         unregister_code16(tap_kc);
     }
@@ -237,15 +229,12 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                         uint16_t y = timer_elapsed(th_instances[i].timer);
                         // early settlement
                         th_instances[i].interval = y;
-                        #ifdef DEBUG_SVM
-                            uprintf("SVM: Y locked at %u ms for Key:0x%04X\n", y, th_instances[i].keycode);
-                        #endif
+                        if (DEBUG_SVM) uprintf("SVM: Y locked at %u ms for Key:0x%04X\n", y, th_instances[i].keycode);
+
                         svm_config_t params = get_svm_params(th_instances[i].keycode & 0xFF);
                         int32_t early_score = params.w_x * y + params.w_y * y + params.b;
                         if (early_score > 0) {
-                        #ifdef DEBUG_SVM
-                            uprintf("SVM: Early Settle! Y=%u is long enough for HOLD.\n", y);
-                        #endif
+                            if (DEBUG_SVM) uprintf("SVM: Early Settle! Y=%u is long enough for HOLD.\n", y);
                             settle_instance(i, true);
                             continue;
                         }
@@ -310,20 +299,14 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         if (record->event.pressed || is_press_buffered(record->event.key.col, record->event.key.row)) {
             if (buf_count < SVM_BUF_SIZE) {
                 event_buffer[buf_count++] = *record;
-                #ifdef DEBUG_SVM
-                uprintf("SVM: Buffered Col:%d Row:%d Pressed:%d (count=%d)\n", record->event.key.col, record->event.key.row, record->event.pressed, buf_count);
-                #endif
+                if (DEBUG_SVM) uprintf("SVM: Buffered Col:%d Row:%d Pressed:%d (count=%d)\n", record->event.key.col, record->event.key.row, record->event.pressed, buf_count);
                 return false;
             } else {
-                #ifdef DEBUG_SVM
-                uprintf("SVM: Buffer overflow! Bypassing Key\n");
-                #endif
+                if (DEBUG_SVM) uprintf("SVM: Buffer overflow! Bypassing Key\n");
             }
         } else {
             // バッファに関係ないキーのリリースは即座に通してOSのキーリピート暴発を防ぐ
-            #ifdef DEBUG_SVM
-            uprintf("SVM: Bypassed buffer for Release Col:%d Row:%d\n", record->event.key.col, record->event.key.row);
-            #endif
+            if (DEBUG_SVM) uprintf("SVM: Bypassed buffer for Release Col:%d Row:%d\n", record->event.key.col, record->event.key.row);
         }
     }
 
@@ -336,9 +319,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                     .interval = 0, .active = true, .combined = false, .state = ST_WAITING,
                     .combo_count = 0
                 };
-                #ifdef DEBUG_SVM
-                uprintf("SVM: START WAITING Key:0x%04X\n", keycode);
-                #endif
+                if (DEBUG_SVM) uprintf("SVM: START WAITING Key:0x%04X\n", keycode);
                 return false;
             }
         }
@@ -367,16 +348,12 @@ void matrix_scan_user(void) {
 
             // スコアが0を超えた（250ms経過した）瞬間にHold確定
             if (score > 0) {
-                #ifdef DEBUG_SVM
-                uprintf("SVM: Threshold reached! HOLD [Key:0x%04X]\n", inst->keycode);
-                #endif
+                if (DEBUG_SVM) uprintf("SVM: Threshold reached! HOLD [Key:0x%04X]\n", inst->keycode);
                 settle_instance(i, true);
             }
             // 2. 【最大待ち時間のフェイルセーフ】SVMスコアが満たされなくても、guardを超えたら強制Hold
             else if (x > params.guard && !inst->combined) {
-                #ifdef DEBUG_SVM
-                uprintf("SVM: Guard timeout! Force HOLD [Key:0x%04X]\n", inst->keycode);
-                #endif
+                if (DEBUG_SVM) uprintf("SVM: Guard timeout! Force HOLD [Key:0x%04X]\n", inst->keycode);
                 settle_instance(i, true);
             }
         }
