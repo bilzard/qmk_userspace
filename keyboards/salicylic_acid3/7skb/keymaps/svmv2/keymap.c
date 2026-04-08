@@ -95,7 +95,7 @@ return state;
 #include "print.h"
 
 // --- デバッグログのON/OFFスイッチ (1:ON, 0:OFF) ---
-#define DEBUG_SVM 1
+#define DEBUG_SVM 0
 
 #define MAX_ACTIVE_TH 8
 #define SVM_BUF_SIZE 32
