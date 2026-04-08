@@ -356,7 +356,7 @@ void matrix_scan_user(void) {
         th_instance_t *inst = &th_instances[i];
         if (inst->state == ST_WAITING) {
             uint16_t x = timer_elapsed(inst->timer);
-            uint16_t y = (inst->interval > 0) ? inst->interval : x;
+            uint16_t y = (inst->interval > 0) ? inst->interval : 0; // 初期値はx切片を閾値としてhold時間のみで縮退して判別
             svm_config_t params = get_svm_params(inst->keycode & 0xFF);
             int32_t score = params.w_x * x + params.w_y * y + params.b;
 
