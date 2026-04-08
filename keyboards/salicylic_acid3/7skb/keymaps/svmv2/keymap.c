@@ -95,11 +95,12 @@ return state;
 #include "print.h"
 
 // --- デバッグログのON/OFFスイッチ (1:ON, 0:OFF) ---
-#define DEBUG_SVM 0
+#define DEBUG_SVM 1
 
 #define MAX_ACTIVE_TH 8
 #define SVM_BUF_SIZE 32
 #define MAX_COMBO_COUNT 2 // n文字以上打たれたらHold確定
+#define TAPPING_TOGGLE_TERM 200 // 何ms以内の再タップでリピート判定にするか
 
 typedef struct {
     int32_t w_x;
@@ -137,6 +138,17 @@ static th_instance_t th_instances[MAX_ACTIVE_TH];
 static keyrecord_t event_buffer[SVM_BUF_SIZE];
 static uint8_t buf_count = 0;
 static bool is_replaying = false;
+
+#if TAPPING_TOGGLE_TERM > 0
+typedef struct {
+    uint16_t last_tap_keycode;    // 最後にTapされたキー
+    uint16_t last_tap_time;       // 最後にTapされた時間
+    uint16_t repeating_source_kc; // 現在リピート押しっぱなしにしている元のキー
+    bool     is_repeating;        // リピート状態のフラグ
+} tap_repeat_t;
+
+static tap_repeat_t tt_state = {0}; // ゼロ初期化
+#endif
 
 // 【新規追加】指定したキーの「押下（Press）」がバッファ内に存在するかチェックする
 bool is_press_buffered(uint8_t col, uint8_t row) {
@@ -201,6 +213,12 @@ void settle_instance(uint8_t inst_idx, bool as_hold) {
         register_code16(tap_kc);
         inst->active = false;
         if (DEBUG_SVM) uprintf("SVM: Fixed as TAP [Key:0x%04X, TapKC:0x%02X]\n", inst->keycode, tap_kc);
+
+#if TAPPING_TOGGLE_TERM > 0
+        tt_state.last_tap_keycode = inst->keycode;
+        tt_state.last_tap_time = timer_read();
+#endif
+
         replay_buffer();
         unregister_code16(tap_kc);
     }
@@ -216,6 +234,22 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         }
         return true;
     }
+
+#if TAPPING_TOGGLE_TERM > 0
+    // 1. リピート中のキーが離された時の処理
+    if (!record->event.pressed && tt_state.is_repeating && keycode == tt_state.repeating_source_kc) {
+        unregister_code16(keycode & 0xFF);
+        // 連続リピート可能にするため、フラグを倒して時間を更新
+        tt_state.is_repeating = false;
+        tt_state.last_tap_keycode = keycode;
+        tt_state.last_tap_time = timer_read();
+        return false;
+    }
+    // 2. 違うキーが押されたら状態を全リセット
+    if (record->event.pressed && keycode != tt_state.last_tap_keycode) {
+        tt_state = (tap_repeat_t){0}; // 構造体を一発で安全に初期化
+    }
+#endif
 
     // -- 1. フラグ更新 --
     if (record->event.pressed) {
@@ -266,6 +300,12 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                         if (!inst->combined) {
                             register_code16(tap_kc);
                             inst->active = false;
+
+#if TAPPING_TOGGLE_TERM > 0
+                            tt_state.last_tap_keycode = keycode;
+                            tt_state.last_tap_time = timer_read();
+#endif
+
                             replay_buffer();
                             unregister_code16(tap_kc);
                         } else {
@@ -312,6 +352,17 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 
     // -- 4. 新規T&Hフック --
     if (record->event.pressed && (IS_QK_MOD_TAP(keycode) || IS_QK_LAYER_TAP(keycode))) {
+
+#if TAPPING_TOGGLE_TERM > 0
+        if (keycode == tt_state.last_tap_keycode && timer_elapsed(tt_state.last_tap_time) < TAPPING_TOGGLE_TERM) {
+            if (DEBUG_SVM) uprintf("SVM: Repeat Tap detected! [Key:0x%04X]\n", keycode);
+            tt_state.is_repeating = true;
+            tt_state.repeating_source_kc = keycode;
+            register_code16(keycode & 0xFF); // Tapキーを即座に押しっぱなしにする
+            return false; // SVMエンジンには通さず終了
+        }
+#endif
+
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
             if (!th_instances[i].active) {
                 th_instances[i] = (th_instance_t){
