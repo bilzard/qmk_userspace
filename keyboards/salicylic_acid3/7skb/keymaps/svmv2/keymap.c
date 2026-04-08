@@ -275,7 +275,9 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 
                         // hold with n combo: n文字以上打たれたら問答無用でHold確定
                         if (th_instances[i].combo_count >= MAX_COMBO_COUNT) {
+                            if (DEBUG_SVM) uprintf("SVM: Combo Settle! Combo count %d reached for HOLD.\n", th_instances[i].combo_count);
                             settle_instance(i, true);
+                            continue;
                         }
                     }
                 }
@@ -293,7 +295,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 
                 if (inst->state == ST_WAITING) {
                     uint16_t x = timer_elapsed(inst->timer);
-                    uint16_t y = (inst->interval > 0) ? inst->interval : x;
+                    uint16_t y = (inst->interval > 0) ? inst->interval : 0;
                     int32_t score = params.w_x * x + params.w_y * y + params.b;
 
                     if (score > 0) {
