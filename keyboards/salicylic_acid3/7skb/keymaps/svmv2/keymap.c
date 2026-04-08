@@ -115,8 +115,11 @@ typedef struct {
 
 svm_config_t get_svm_params(uint16_t tap_kc) {
     switch (tap_kc) {
-        case KC_SPC: case KC_BSPC: case KC_ENT: case KC_SEMICOLON: case KC_EQUAL: case KC_MINUS:
+        case KC_SPC: case KC_BSPC: case KC_ENT:
+        case KC_SEMICOLON: case KC_EQUAL: case KC_MINUS:
             return (svm_config_t){1710, -338, -217148, 250};
+        case KC_G: case KC_H:
+            return (svm_config_t){1000, 0, -180000, 180};
         case KC_A: case KC_S: case KC_D: case KC_F:
         case KC_J: case KC_K: case KC_L:
             return (svm_config_t){1000, 0, -250000, 250};
