@@ -115,7 +115,7 @@ svm_config_t get_svm_params(uint16_t tap_kc) {
     switch (tap_kc) {
         case KC_SPC: case KC_BSPC: case KC_ENT:
         case KC_SEMICOLON: case KC_EQUAL: case KC_MINUS:
-            return (svm_config_t){.w_x=1710, .w_y=-338, .b=-217148, .guard=180};
+            return (svm_config_t){.w_x=1710, .w_y=-338, .b=-217148, .guard=250};
         case KC_G: case KC_H:
             return (svm_config_t){.w_x=1000, .w_y=0, .b=-180000, .guard=180};
         case KC_A: case KC_S: case KC_D: case KC_F:
@@ -291,8 +291,14 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                         register_code16(tap_kc);
                         inst->active = false;
 #if TAPPING_TOGGLE_TERM > 0
-                        tt_state.last_tap_keycode = keycode;
-                        tt_state.last_tap_time = timer_read();
+                        tt_state.last_tap_keycode = inst->keycode;
+                        // 【修正】決済された現在時刻ではなく、本来の打鍵時刻を記録する
+                        // (inst->x が確定していれば、指が離れた時刻を擬似的に計算)
+                        uint16_t actual_time = inst->timer;
+                        if (inst->x != 0xFFFF) {
+                            actual_time += inst->x;
+                        }
+                        tt_state.last_tap_time = actual_time;
 #endif
                         replay_buffer();
                         unregister_code16(tap_kc);
@@ -328,13 +334,17 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if (record->event.pressed && (IS_QK_MOD_TAP(keycode) || IS_QK_LAYER_TAP(keycode))) {
 
 #if TAPPING_TOGGLE_TERM > 0
+    // 【修正】スペースキー等、Tapの直後にHoldとして多用するキーはリピート連打の対象から外す
+    uint16_t tap_kc = keycode & 0xFF;
+    if (tap_kc != KC_SPC) { // ← KC_SPC は除外
         if (keycode == tt_state.last_tap_keycode && timer_elapsed(tt_state.last_tap_time) < TAPPING_TOGGLE_TERM) {
             if (DEBUG_SVM) uprintf("SVM: Repeat Tap detected! [Key:0x%04X]\n", keycode);
             tt_state.is_repeating = true;
             tt_state.repeating_source_kc = keycode;
-            register_code16(keycode & 0xFF); // Tapキーを即座に押しっぱなしにする
-            return false; // SVMエンジンには通さず終了
+            register_code16(tap_kc);
+            return false;
         }
+    }
 #endif
 
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
@@ -417,6 +427,7 @@ void matrix_scan_user(void) {
             if (t >= inst->timeout) {
                 settle_instance(i, inst->is_hold);
                 // ※ここにあったRetro Tap処理は削除。Releaseイベント側で処理します。
+                if (DEBUG_SVM) uprintf("SVM: Timeout! Settled as %s [Key:0x%04X, TapKC:0x%02X, X:0x%04X, Y:0x%04X]\n", inst->is_hold ? "HOLD" : "TAP", inst->keycode, tap_kc, inst->x, inst->y);
             }
         }
         else if (inst->state == ST_RELEASING) {
