@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include QMK_KEYBOARD_H
 
 
@@ -101,6 +102,7 @@ return state;
 #define SVM_BUF_SIZE 32
 #define MAX_COMBO_COUNT 2 // n文字以上打たれたらHold確定
 #define TAPPING_TOGGLE_TERM 200 // 何ms以内の再タップでリピート判定にするか
+#define HOLD_RELEASE_DELAY 30 // Hold→Releaseに移行するまでの猶予時間（ms）
 
 typedef struct {
     int32_t w_x;
@@ -127,7 +129,12 @@ svm_config_t get_svm_params(uint16_t tap_kc) {
 typedef struct {
     uint16_t keycode;
     uint16_t timer;
-    uint16_t interval;
+
+    uint16_t x;
+    uint16_t y;
+    uint16_t timeout;
+    bool     is_hold;
+
     bool     active;
     bool     combined;
     uint8_t  combo_count;
@@ -251,31 +258,21 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     }
 #endif
 
-    // -- 1. フラグ更新 --
+    // -- 1. event: other key pressed
     if (record->event.pressed) {
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
-            if (th_instances[i].active && th_instances[i].keycode != keycode) {
-                if (th_instances[i].state == ST_WAITING || th_instances[i].state == ST_HOLDING) {
-                    th_instances[i].combined = true;
-                    th_instances[i].combo_count++;
+            th_instance_t *inst = &th_instances[i];
+            if (inst->active && inst->keycode != keycode) {
+                if (inst->state == ST_WAITING || inst->state == ST_HOLDING) {
+                    inst->combined = true;
+                    inst->combo_count++;
 
-                    if (th_instances[i].state == ST_WAITING && th_instances[i].interval == 0) {
-                        uint16_t y = timer_elapsed(th_instances[i].timer);
-                        // early settlement
-                        th_instances[i].interval = y;
-                        if (DEBUG_SVM) uprintf("SVM: Y locked at %u ms for Key:0x%04X\n", y, th_instances[i].keycode);
-
-                        svm_config_t params = get_svm_params(th_instances[i].keycode & 0xFF);
-                        int32_t early_score = params.w_x * y + params.w_y * y + params.b;
-                        if (early_score > 0) {
-                            if (DEBUG_SVM) uprintf("SVM: Early Settle! Y=%u is long enough for HOLD.\n", y);
-                            settle_instance(i, true);
-                            continue;
-                        }
+                    if (inst->state == ST_WAITING) {
+                        inst->y = timer_elapsed(inst->timer);
 
                         // hold with n combo: n文字以上打たれたら問答無用でHold確定
-                        if (th_instances[i].combo_count >= MAX_COMBO_COUNT) {
-                            if (DEBUG_SVM) uprintf("SVM: Combo Settle! Combo count %d reached for HOLD.\n", th_instances[i].combo_count);
+                        if (inst->combo_count >= MAX_COMBO_COUNT) {
+                            if (DEBUG_SVM) uprintf("SVM: Combo Settle! Combo count %d reached for HOLD.\n", inst->combo_count);
                             settle_instance(i, true);
                             continue;
                         }
@@ -288,44 +285,28 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     // -- 2. リリース処理 --
     if (!record->event.pressed) {
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
-            if (th_instances[i].active && th_instances[i].keycode == keycode) {
-                th_instance_t *inst = &th_instances[i];
+            th_instance_t *inst = &th_instances[i];
+            if (inst->active && inst->keycode == keycode) {
                 uint16_t tap_kc = keycode & 0xFF;
-                svm_config_t params = get_svm_params(tap_kc);
 
                 if (inst->state == ST_WAITING) {
-                    uint16_t x = timer_elapsed(inst->timer);
-                    uint16_t y = (inst->interval > 0) ? inst->interval : 0;
-                    int32_t score = params.w_x * x + params.w_y * y + params.b;
+                    inst->x = timer_elapsed(inst->timer);
+                }
+                else if (inst->state == ST_HOLDING) {
+                    execute_dynamic_hold(keycode, false); // まず修飾キーを離す
 
-                    if (score > 0) {
-                        if (!inst->combined) {
-                            register_code16(tap_kc);
-                            inst->active = false;
-
-#if TAPPING_TOGGLE_TERM > 0
-                            tt_state.last_tap_keycode = keycode;
-                            tt_state.last_tap_time = timer_read();
-#endif
-
-                            replay_buffer();
-                            unregister_code16(tap_kc);
-                        } else {
-                            settle_instance(i, true);
-                            inst->state = ST_RELEASING;
-                            inst->timer = timer_read();
-                        }
-                    } else {
-                        settle_instance(i, false);
-                    }
-                } else if (inst->state == ST_HOLDING) {
                     if (!inst->combined) {
-                        execute_dynamic_hold(keycode, false);
+                        // 【Retro Tap】単独長押しで離された場合、文字を入力
                         register_code16(tap_kc);
                         inst->active = false;
+#if TAPPING_TOGGLE_TERM > 0
+                        tt_state.last_tap_keycode = keycode;
+                        tt_state.last_tap_time = timer_read();
+#endif
                         replay_buffer();
                         unregister_code16(tap_kc);
                     } else {
+                        // コンボ後の場合は余韻フェーズへ
                         inst->state = ST_RELEASING;
                         inst->timer = timer_read();
                     }
@@ -367,10 +348,18 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
             if (!th_instances[i].active) {
+                svm_config_t params = get_svm_params(keycode & 0xFF);
                 th_instances[i] = (th_instance_t){
-                    .keycode = keycode, .timer = timer_read(),
-                    .interval = 0, .active = true, .combined = false, .state = ST_WAITING,
-                    .combo_count = 0
+                    .keycode = keycode,
+                    .timer = timer_read(),
+                    .x = 0xFFFF,
+                    .y = 0xFFFF,
+                    .timeout = params.guard,
+                    .is_hold = true,
+                    .active = true,
+                    .combined = false,
+                    .state = ST_WAITING,
+                    .combo_count = 0,
                 };
                 if (DEBUG_SVM) uprintf("SVM: START WAITING Key:0x%04X\n", keycode);
                 return false;
@@ -388,31 +377,58 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     return true;
 }
 
+int32_t get_svm_score(uint16_t tap_kc, uint16_t x, uint16_t y) {
+    svm_config_t params = get_svm_params(tap_kc);
+    return params.w_x * x + params.w_y * y + params.b;
+}
+
 void matrix_scan_user(void) {
     for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
         if (!th_instances[i].active) continue;
 
         th_instance_t *inst = &th_instances[i];
-        if (inst->state == ST_WAITING) {
-            uint16_t x = timer_elapsed(inst->timer);
-            uint16_t y = (inst->interval > 0) ? inst->interval : 0; // 初期値はx切片を閾値としてhold時間のみで縮退して判別
-            svm_config_t params = get_svm_params(inst->keycode & 0xFF);
-            int32_t score = params.w_x * x + params.w_y * y + params.b;
 
-            // スコアが0を超えた（250ms経過した）瞬間にHold確定
-            if (score > 0) {
-                if (DEBUG_SVM) uprintf("SVM: Threshold reached! HOLD [Key:0x%04X]\n", inst->keycode);
-                settle_instance(i, true);
+        if (inst->state == ST_WAITING) {
+            uint16_t t = timer_elapsed(inst->timer);
+            uint16_t tap_kc = inst->keycode & 0xFF;
+            svm_config_t params = get_svm_params(tap_kc);
+
+            // 1. 両方確定している場合 (即時決着)
+            if (inst->x != 0xFFFF && inst->y != 0xFFFF) {
+                int32_t score = get_svm_score(tap_kc, inst->x, inst->y);
+                settle_instance(i, (score > 0));
+                continue;
             }
-            // 2. 【最大待ち時間のフェイルセーフ】SVMスコアが満たされなくても、guardを超えたら強制Hold
-            else if (x > params.guard && !inst->combined) {
-                if (DEBUG_SVM) uprintf("SVM: Guard timeout! Force HOLD [Key:0x%04X]\n", inst->keycode);
-                settle_instance(i, true);
+            // 2. Xのみ確定 (Release後、未コンボ)
+            else if (inst->x != 0xFFFF) {
+                if (params.w_y == 0) {
+                    inst->timeout = 0; // w_y=0ならYを待つ意味がないので即時
+                } else {
+                    int32_t timeout_calc = -(params.w_x * inst->x + params.b) / params.w_y;
+                    // マイナスなら即時(0)、guard以上ならguardに丸める
+                    inst->timeout = (timeout_calc < 0) ? 0 : (timeout_calc < params.guard ? timeout_calc : params.guard);
+                }
+                inst->is_hold = false;
+            }
+            // 3. Yのみ確定 (Press後、未リリース)
+            else if (inst->y != 0xFFFF) {
+                if (params.w_x == 0) {
+                    inst->timeout = 0;
+                } else {
+                    int32_t timeout_calc = -(params.w_y * inst->y + params.b) / params.w_x;
+                    inst->timeout = (timeout_calc < 0) ? 0 : (timeout_calc < params.guard ? timeout_calc : params.guard);
+                }
+                inst->is_hold = true;
+            }
+
+            // タイムアウトの執行
+            if (t >= inst->timeout) {
+                settle_instance(i, inst->is_hold);
+                // ※ここにあったRetro Tap処理は削除。Releaseイベント側で処理します。
             }
         }
-        // (RELEASINGフェーズの処理はそのまま)
         else if (inst->state == ST_RELEASING) {
-            if (timer_elapsed(inst->timer) > 30) {
+            if (timer_elapsed(inst->timer) > HOLD_RELEASE_DELAY) {
                 execute_dynamic_hold(inst->keycode, false);
                 inst->active = false;
             }
