@@ -100,9 +100,9 @@ return state;
 
 #define MAX_ACTIVE_TH 8
 #define SVM_BUF_SIZE 32
-#define MAX_COMBO_COUNT 2 // n文字以上打たれたらHold確定
 #define TAPPING_TOGGLE_TERM 200 // 何ms以内の再タップでリピート判定にするか
 #define HOLD_RELEASE_DELAY 30 // Hold→Releaseに移行するまでの猶予時間（ms）
+#define MIN_WAIT_TIME 120 // 待機状態とみなす最低時間（ms）
 
 typedef struct {
     int32_t w_x;
@@ -115,14 +115,14 @@ svm_config_t get_svm_params(uint16_t tap_kc) {
     switch (tap_kc) {
         case KC_SPC: case KC_BSPC: case KC_ENT:
         case KC_SEMICOLON: case KC_EQUAL: case KC_MINUS:
-            return (svm_config_t){1710, -338, -217148, 250};
+            return (svm_config_t){.w_x=1710, .w_y=-338, .b=-217148, .guard=180};
         case KC_G: case KC_H:
-            return (svm_config_t){1000, 0, -180000, 180};
+            return (svm_config_t){.w_x=1000, .w_y=0, .b=-180000, .guard=180};
         case KC_A: case KC_S: case KC_D: case KC_F:
         case KC_J: case KC_K: case KC_L:
-            return (svm_config_t){1000, 0, -250000, 250};
+            return (svm_config_t){.w_x=1000, .w_y=0, .b=-250000, .guard=250};
         default:
-            return (svm_config_t){1000, 0, -200000, 200};
+            return (svm_config_t){.w_x=1000, .w_y=0, .b=-200000, .guard=200};
     }
 }
 
@@ -137,7 +137,6 @@ typedef struct {
 
     bool     active;
     bool     combined;
-    uint8_t  combo_count;
     enum { ST_WAITING, ST_HOLDING, ST_RELEASING } state;
 } th_instance_t;
 
@@ -265,17 +264,9 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
             if (inst->active && inst->keycode != keycode) {
                 if (inst->state == ST_WAITING || inst->state == ST_HOLDING) {
                     inst->combined = true;
-                    inst->combo_count++;
 
                     if (inst->state == ST_WAITING) {
                         inst->y = timer_elapsed(inst->timer);
-
-                        // hold with n combo: n文字以上打たれたら問答無用でHold確定
-                        if (inst->combo_count >= MAX_COMBO_COUNT) {
-                            if (DEBUG_SVM) uprintf("SVM: Combo Settle! Combo count %d reached for HOLD.\n", inst->combo_count);
-                            settle_instance(i, true);
-                            continue;
-                        }
                     }
                 }
             }
@@ -359,7 +350,6 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                     .active = true,
                     .combined = false,
                     .state = ST_WAITING,
-                    .combo_count = 0,
                 };
                 if (DEBUG_SVM) uprintf("SVM: START WAITING Key:0x%04X\n", keycode);
                 return false;
@@ -402,21 +392,23 @@ void matrix_scan_user(void) {
             // 2. Xのみ確定 (Release後、未コンボ)
             else if (inst->x != 0xFFFF) {
                 if (params.w_y == 0) {
-                    inst->timeout = 0; // w_y=0ならYを待つ意味がないので即時
+                    inst->timeout = MIN_WAIT_TIME; // w_y=0ならYを待つ意味がないので即時
                 } else {
                     int32_t timeout_calc = -(params.w_x * inst->x + params.b) / params.w_y;
-                    // マイナスなら即時(0)、guard以上ならguardに丸める
-                    inst->timeout = (timeout_calc < 0) ? 0 : (timeout_calc < params.guard ? timeout_calc : params.guard);
+                    // マイナスなら即時(MIN_WAIT_TIME)、guard以上ならguardに丸める
+                    inst->timeout = (timeout_calc < 0) ? MIN_WAIT_TIME : (timeout_calc < params.guard ? timeout_calc : params.guard);
+                    inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME; // 最低待機時間を確保
                 }
                 inst->is_hold = false;
             }
             // 3. Yのみ確定 (Press後、未リリース)
             else if (inst->y != 0xFFFF) {
                 if (params.w_x == 0) {
-                    inst->timeout = 0;
+                    inst->timeout = MIN_WAIT_TIME; // w_x=0ならXを待つ意味がないので即時
                 } else {
                     int32_t timeout_calc = -(params.w_y * inst->y + params.b) / params.w_x;
-                    inst->timeout = (timeout_calc < 0) ? 0 : (timeout_calc < params.guard ? timeout_calc : params.guard);
+                    inst->timeout = (timeout_calc < 0) ? MIN_WAIT_TIME : (timeout_calc < params.guard ? timeout_calc : params.guard);
+                    inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME; // 最低待機時間を確保
                 }
                 inst->is_hold = true;
             }
