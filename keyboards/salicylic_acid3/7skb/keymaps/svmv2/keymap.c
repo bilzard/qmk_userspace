@@ -284,16 +284,13 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                     inst->x = timer_elapsed(inst->timer);
                 }
                 else if (inst->state == ST_HOLDING) {
-                    execute_dynamic_hold(keycode, false); // まず修飾キーを離す
-
                     if (!inst->combined) {
-                        // 【Retro Tap】単独長押しで離された場合、文字を入力
+                        // 【Retro Tap】単独長押しなのでここで即座に離す
+                        execute_dynamic_hold(keycode, false);
                         register_code16(tap_kc);
                         inst->active = false;
 #if TAPPING_TOGGLE_TERM > 0
                         tt_state.last_tap_keycode = inst->keycode;
-                        // 【修正】決済された現在時刻ではなく、本来の打鍵時刻を記録する
-                        // (inst->x が確定していれば、指が離れた時刻を擬似的に計算)
                         uint16_t actual_time = inst->timer;
                         if (inst->x != 0xFFFF) {
                             actual_time += inst->x;
@@ -303,7 +300,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                         replay_buffer();
                         unregister_code16(tap_kc);
                     } else {
-                        // コンボ後の場合は余韻フェーズへ
+                        // 【コンボ後】ここでは離さず、余韻フェーズへ送る！
                         inst->state = ST_RELEASING;
                         inst->timer = timer_read();
                     }
@@ -392,42 +389,55 @@ void matrix_scan_user(void) {
             uint16_t t = timer_elapsed(inst->timer);
             uint16_t tap_kc = inst->keycode & 0xFF;
             svm_config_t params = get_svm_params(tap_kc);
+            bool settle_now = false;
 
             // 1. 両方確定している場合 (即時決着)
             if (inst->x != 0xFFFF && inst->y != 0xFFFF) {
                 int32_t score = get_svm_score(tap_kc, inst->x, inst->y);
-                settle_instance(i, (score > 0));
-                continue;
+                inst->is_hold = (score > 0);
+                settle_now = true;
             }
             // 2. Xのみ確定 (Release後、未コンボ)
             else if (inst->x != 0xFFFF) {
                 if (params.w_y == 0) {
-                    inst->timeout = MIN_WAIT_TIME; // w_y=0ならYを待つ意味がないので即時
+                    inst->timeout = MIN_WAIT_TIME;
                 } else {
                     int32_t timeout_calc = -(params.w_x * inst->x + params.b) / params.w_y;
-                    // マイナスなら即時(MIN_WAIT_TIME)、guard以上ならguardに丸める
                     inst->timeout = (timeout_calc < 0) ? MIN_WAIT_TIME : (timeout_calc < params.guard ? timeout_calc : params.guard);
-                    inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME; // 最低待機時間を確保
+                    inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME;
                 }
                 inst->is_hold = false;
+                if (t >= inst->timeout) settle_now = true;
             }
             // 3. Yのみ確定 (Press後、未リリース)
             else if (inst->y != 0xFFFF) {
                 if (params.w_x == 0) {
-                    inst->timeout = MIN_WAIT_TIME; // w_x=0ならXを待つ意味がないので即時
+                    inst->timeout = MIN_WAIT_TIME;
                 } else {
                     int32_t timeout_calc = -(params.w_y * inst->y + params.b) / params.w_x;
                     inst->timeout = (timeout_calc < 0) ? MIN_WAIT_TIME : (timeout_calc < params.guard ? timeout_calc : params.guard);
-                    inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME; // 最低待機時間を確保
+                    inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME;
                 }
                 inst->is_hold = true;
+                if (t >= inst->timeout) settle_now = true;
+            }
+            // 4. 何も起きていない (単なる待機)
+            else {
+                if (t >= inst->timeout) settle_now = true;
             }
 
-            // タイムアウトの執行
-            if (t >= inst->timeout) {
+            // --- 確定の執行 ---
+            if (settle_now) {
                 settle_instance(i, inst->is_hold);
-                // ※ここにあったRetro Tap処理は削除。Releaseイベント側で処理します。
-                if (DEBUG_SVM) uprintf("SVM: Timeout! Settled as %s [Key:0x%04X, TapKC:0x%02X, X:0x%04X, Y:0x%04X]\n", inst->is_hold ? "HOLD" : "TAP", inst->keycode, tap_kc, inst->x, inst->y);
+                if (DEBUG_SVM) uprintf("SVM: Timeout! Settled as %s [Key:0x%04X, X:0x%04X, Y:0x%04X]\n", inst->is_hold ? "HOLD" : "TAP", inst->keycode, inst->x, inst->y);
+
+                // 【最大のスタック原因の解消】
+                // Holdとして確定したが、すでに物理的な指が離されている場合！
+                if (inst->is_hold && inst->x != 0xFFFF) {
+                    // Releaseイベントはもう来ないので、強制的に余韻フェーズへ送る
+                    inst->state = ST_RELEASING;
+                    inst->timer = timer_read();
+                }
             }
         }
         else if (inst->state == ST_RELEASING) {
