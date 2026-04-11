@@ -102,7 +102,7 @@ return state;
 #define SVM_BUF_SIZE 32
 #define TAPPING_TOGGLE_TERM 200 // 何ms以内の再タップでリピート判定にするか
 #define HOLD_RELEASE_DELAY 30 // Hold→Releaseに移行するまでの猶予時間（ms）
-#define MIN_WAIT_TIME 120 // 待機状態とみなす最低時間（ms）
+#define MIN_WAIT_TIME 50 // 待機状態とみなす最低時間（ms）
 
 typedef struct {
     int32_t w_x;
