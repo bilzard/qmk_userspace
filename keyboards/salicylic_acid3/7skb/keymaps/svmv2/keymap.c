@@ -97,6 +97,7 @@ return state;
 
 // --- デバッグログのON/OFFスイッチ (1:ON, 0:OFF) ---
 #define DEBUG_SVM 0
+#define TRAINING_LOG 0
 
 #define MAX_ACTIVE_TH 8
 #define SVM_BUF_SIZE 32
@@ -377,7 +378,50 @@ int32_t get_svm_score(uint16_t tap_kc, uint16_t x, uint16_t y) {
     return params.w_x * x + params.w_y * y + params.b;
 }
 
+#ifdef TRAINING_LOG
+#include "print.h"
+
+// 前回のマトリックス状態を保持する配列
+static matrix_row_t previous_matrix[MATRIX_ROWS] = {0};
+
+void training_log(void) {
+    // 全ての行（Row）をスキャン
+    for (uint8_t r = 0; r < MATRIX_ROWS; r++) {
+        // 現在の行の物理的な状態（ビットマスク）を取得
+        matrix_row_t current_row = matrix_get_row(r);
+
+        // 前回との状態の差分（XOR）を計算
+        matrix_row_t changed_bits = current_row ^ previous_matrix[r];
+
+        // いずれかのキーに変化があった場合のみ処理
+        if (changed_bits) {
+            // 現在のマイコンの起動からの経過時間（ミリ秒・32bit）を取得
+            uint32_t now = timer_read32();
+
+            // どの列（Col）に変化があったかを特定
+            for (uint8_t c = 0; c < MATRIX_COLS; c++) {
+                // その列のビットが変化していた場合
+                if (changed_bits & (1 << c)) {
+                    // 現在のビットが立っていればPush、落ちていればRelease
+                    bool is_pressed = (current_row & (1 << c)) != 0;
+
+                    // Python等でパースしやすいフォーマットでコンソール出力
+                    // 例: [00123456] R1,C2: Push
+                    uprintf("[%08lu] R%d,C%d: %s\n", now, r, c, is_pressed ? "Push" : "Release");
+                }
+            }
+            // 状態を更新
+            previous_matrix[r] = current_row;
+        }
+    }
+}
+#endif
+
 void matrix_scan_user(void) {
+#ifdef TRAINING_LOG
+    training_log();
+#endif
+
     for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
         if (!th_instances[i].active) continue;
 
