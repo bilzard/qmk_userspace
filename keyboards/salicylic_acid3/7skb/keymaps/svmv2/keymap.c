@@ -375,7 +375,15 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 
 int32_t get_svm_score(uint16_t tap_kc, uint16_t x, uint16_t y) {
     svm_config_t params = get_svm_params(tap_kc);
-    return params.w_x * x + params.w_y * y + params.b;
+
+    // 1. SVMのスコア
+    int32_t svm_score = params.w_x * x + params.w_y * y + params.b;
+
+    // 2. 物理的なオーバーラップスコア (x > y ならプラス)
+    int32_t overlap_score = (int32_t)x - (int32_t)y;
+
+    // 3. 2つの式の最小値を取る (両方 >0 の場合のみプラスになる)
+    return (svm_score < overlap_score) ? svm_score : overlap_score;
 }
 
 #if TRAINING_LOG > 0
