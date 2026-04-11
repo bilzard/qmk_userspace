@@ -104,6 +104,7 @@ return state;
 #define TAPPING_TOGGLE_TERM 200 // 何ms以内の再タップでリピート判定にするか
 #define HOLD_RELEASE_DELAY 30 // Hold→Releaseに移行するまでの猶予時間（ms）
 #define MIN_WAIT_TIME 50 // 待機状態とみなす最低時間（ms）
+#define TAP_NON_OVERLAPPED false // 重なりがない連続したキー入力を即時にタップとみなす
 
 typedef struct {
     int32_t w_x;
@@ -379,11 +380,15 @@ int32_t get_svm_score(uint16_t tap_kc, uint16_t x, uint16_t y) {
     // 1. SVMのスコア
     int32_t svm_score = params.w_x * x + params.w_y * y + params.b;
 
+#if TAP_NON_OVERLAPPED
     // 2. 物理的なオーバーラップスコア (x > y ならプラス)
     int32_t overlap_score = (int32_t)x - (int32_t)y;
 
     // 3. 2つの式の最小値を取る (両方 >0 の場合のみプラスになる)
     return (svm_score < overlap_score) ? svm_score : overlap_score;
+#else
+    return svm_score;
+#endif
 }
 
 #if TRAINING_LOG > 0
@@ -449,7 +454,17 @@ void matrix_scan_user(void) {
             }
             // 2. Xのみ確定 (Release後、未コンボ)
             else if (inst->x != 0xFFFF) {
+#if TAP_NON_OVERLAPPED
                 inst->timeout = MIN_WAIT_TIME;
+#else
+                if (params.w_y == 0) {
+                    inst->timeout = MIN_WAIT_TIME;
+                } else {
+                    int32_t timeout_svm = -(params.w_x * inst->x + params.b) / params.w_y;
+                    inst->timeout = (timeout_svm < 0) ? MIN_WAIT_TIME : (timeout_svm < params.guard ? timeout_svm : params.guard);
+                    inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME;
+                }
+#endif
                 inst->is_hold = false;
                 if (t >= inst->timeout) settle_now = true;
             }
