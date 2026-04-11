@@ -449,13 +449,7 @@ void matrix_scan_user(void) {
             }
             // 2. Xのみ確定 (Release後、未コンボ)
             else if (inst->x != 0xFFFF) {
-                if (params.w_y == 0) {
-                    inst->timeout = MIN_WAIT_TIME;
-                } else {
-                    int32_t timeout_svm = -(params.w_x * inst->x + params.b) / params.w_y;
-                    inst->timeout = (timeout_svm < 0) ? MIN_WAIT_TIME : (timeout_svm < params.guard ? timeout_svm : params.guard);
-                    inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME;
-                }
+                inst->timeout = MIN_WAIT_TIME;
                 inst->is_hold = false;
                 if (t >= inst->timeout) settle_now = true;
             }
