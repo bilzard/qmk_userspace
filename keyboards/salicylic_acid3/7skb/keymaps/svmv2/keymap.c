@@ -452,8 +452,8 @@ void matrix_scan_user(void) {
                 if (params.w_y == 0) {
                     inst->timeout = MIN_WAIT_TIME;
                 } else {
-                    int32_t timeout_calc = -(params.w_x * inst->x + params.b) / params.w_y;
-                    inst->timeout = (timeout_calc < 0) ? MIN_WAIT_TIME : (timeout_calc < params.guard ? timeout_calc : params.guard);
+                    int32_t timeout_svm = -(params.w_x * inst->x + params.b) / params.w_y;
+                    inst->timeout = (timeout_svm < 0) ? MIN_WAIT_TIME : (timeout_svm < params.guard ? timeout_svm : params.guard);
                     inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME;
                 }
                 inst->is_hold = false;
@@ -464,8 +464,8 @@ void matrix_scan_user(void) {
                 if (params.w_x == 0) {
                     inst->timeout = MIN_WAIT_TIME;
                 } else {
-                    int32_t timeout_calc = -(params.w_y * inst->y + params.b) / params.w_x;
-                    inst->timeout = (timeout_calc < 0) ? MIN_WAIT_TIME : (timeout_calc < params.guard ? timeout_calc : params.guard);
+                    int32_t timeout_svm = -(params.w_y * inst->y + params.b) / params.w_x;
+                    inst->timeout = (timeout_svm < 0) ? MIN_WAIT_TIME : (timeout_svm < params.guard ? timeout_svm : params.guard);
                     inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME;
                 }
                 inst->is_hold = true;
