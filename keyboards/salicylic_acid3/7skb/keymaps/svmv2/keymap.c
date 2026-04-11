@@ -116,7 +116,7 @@ svm_config_t get_svm_params(uint16_t tap_kc) {
     switch (tap_kc) {
         case KC_SPC: case KC_BSPC: case KC_ENT:
         case KC_SEMICOLON: case KC_EQUAL: case KC_MINUS:
-            return (svm_config_t){.w_x=1000, .w_y=-200, .b=-127000, .guard=250};
+            return (svm_config_t){.w_x=1000, .w_y=-453, .b=-77251, .guard=250};
         case KC_A: case KC_S: case KC_D: case KC_F:
         case KC_J: case KC_K: case KC_L:
             return (svm_config_t){.w_x=1000, .w_y=0, .b=-250000, .guard=250};
@@ -378,7 +378,7 @@ int32_t get_svm_score(uint16_t tap_kc, uint16_t x, uint16_t y) {
     return params.w_x * x + params.w_y * y + params.b;
 }
 
-#ifdef TRAINING_LOG
+#if TRAINING_LOG > 0
 #include "print.h"
 
 // 前回のマトリックス状態を保持する配列
@@ -418,7 +418,7 @@ void training_log(void) {
 #endif
 
 void matrix_scan_user(void) {
-#ifdef TRAINING_LOG
+#if TRAINING_LOG > 0
     training_log();
 #endif
 
