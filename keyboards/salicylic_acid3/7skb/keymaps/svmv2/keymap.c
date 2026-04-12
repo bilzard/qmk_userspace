@@ -121,8 +121,12 @@ svm_config_t get_svm_params(uint16_t tap_kc) {
             return (svm_config_t){.w_x=1000, .w_y=-559, .b=-63593, .guard=250};
         case KC_SEMICOLON:
             return (svm_config_t){.w_x=1000, .w_y=-175, .b=-127712, .guard=250};
-        case KC_G: case KC_H:
-            return (svm_config_t){.w_x=1000, .w_y=0, .b=-180000, .guard=180};
+        case KC_G:
+            // 同手ロールオーバーが多い G は「Tap」として許容する範囲を広く（bを深く）する
+            return (svm_config_t){.w_x=1000, .w_y=-200, .b=-220000, .guard=250};
+        case KC_H:
+            // 異手コンボの Shift として多用する H は「Hold」として拾う範囲を広く（bを浅く）する
+            return (svm_config_t){.w_x=1000, .w_y=-400, .b=-140000, .guard=250};
         case KC_A: case KC_S: case KC_D: case KC_F:
         case KC_J: case KC_K: case KC_L:
             return (svm_config_t){.w_x=1000, .w_y=0, .b=-250000, .guard=250};
@@ -236,6 +240,11 @@ void settle_instance(uint8_t inst_idx, bool as_hold) {
 }
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    // QMKがSVMに渡してきた全イベントを強制キャプチャ
+    if (DEBUG_SVM) {
+        uprintf("SVM-HOOK: [C:%d R:%d] %s KC:0x%04X\n",
+                record->event.key.col, record->event.key.row, record->event.pressed ? "Press" : "Release", keycode);
+    }
     if (is_replaying) {
         if (IS_QK_MOD_TAP(keycode) || IS_QK_LAYER_TAP(keycode)) {
             uint16_t tap_kc = keycode & 0xFF;
@@ -366,6 +375,10 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                 if (DEBUG_SVM) uprintf("SVM: START WAITING Key:0x%04X\n", keycode);
                 return false;
             }
+        }
+        // 【追加2】ここを通る＝アクティブなT&Hキーが多すぎてトラップに失敗した
+        if (DEBUG_SVM) {
+            uprintf("SVM-ERROR: MAX_ACTIVE_TH is FULL! Dropped Key:0x%04X\n", keycode);
         }
     }
 
