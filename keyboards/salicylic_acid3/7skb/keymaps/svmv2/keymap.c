@@ -493,7 +493,7 @@ void matrix_scan_user(void) {
             // --- 確定の執行 ---
             if (settle_now) {
                 settle_instance(i, inst->is_hold);
-                if (DEBUG_SVM) uprintf("SVM: Timeout! Settled as %s [Key:0x%04X, X:0x%04X, Y:0x%04X]\n", inst->is_hold ? "HOLD" : "TAP", inst->keycode, inst->x, inst->y);
+                if (DEBUG_SVM) uprintf("SVM: Timeout! Settled as %s [Key:0x%04X, X:%dms, Y:%dms]\n", inst->is_hold ? "HOLD" : "TAP", inst->keycode, inst->x, inst->y);
 
                 // 【最大のスタック原因の解消】
                 // Holdとして確定したが、すでに物理的な指が離されている場合！
