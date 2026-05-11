@@ -121,10 +121,6 @@ svm_config_t get_svm_params(uint16_t tap_kc) {
             return (svm_config_t){.w_x=1000, .w_y=-559, .b=-63593, .guard=250};
         case KC_SEMICOLON:
             return (svm_config_t){.w_x=1000, .w_y=-175, .b=-127712, .guard=250};
-        case KC_G:
-            return (svm_config_t){.w_x=1000, .w_y=-200, .b=-220000, .guard=250};
-        case KC_H:
-            return (svm_config_t){.w_x=1000, .w_y=-400, .b=-140000, .guard=250};
         case KC_A: case KC_S: case KC_D: case KC_F:
         case KC_J: case KC_K: case KC_L:
         case KC_G: case KC_H: case KC_B: case KC_N:
@@ -244,15 +240,6 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         uprintf("SVM-HOOK: [C:%d R:%d] %s KC:0x%04X\n",
                 record->event.key.col, record->event.key.row, record->event.pressed ? "Press" : "Release", keycode);
     }
-    if (is_replaying) {
-        if (IS_QK_MOD_TAP(keycode) || IS_QK_LAYER_TAP(keycode)) {
-            uint16_t tap_kc = keycode & 0xFF;
-            if (record->event.pressed) register_code16(tap_kc);
-            else unregister_code16(tap_kc);
-            return false;
-        }
-        return true;
-    }
 
 #if TAPPING_TOGGLE_TERM > 0
     // 1. リピート中のキーが離された時の処理
@@ -324,7 +311,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     }
 
     // --- 3. バッファリング ---
-    if (is_any_th_waiting()) {
+    if (!is_replaying && is_any_th_waiting()) {
         // 【究極の修正】Pressイベント、またはバッファ内にPressが存在するReleaseイベントのみバッファリングする
         if (record->event.pressed || is_press_buffered(record->event.key.col, record->event.key.row)) {
             if (buf_count < SVM_BUF_SIZE) {
@@ -379,13 +366,6 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         if (DEBUG_SVM) {
             uprintf("SVM-ERROR: MAX_ACTIVE_TH is FULL! Dropped Key:0x%04X\n", keycode);
         }
-    }
-
-    // -- 5. T&Hキーのフォールバック・リリース処理 --
-    if (!record->event.pressed && (IS_QK_MOD_TAP(keycode) || IS_QK_LAYER_TAP(keycode))) {
-        uint16_t tap_kc = keycode & 0xFF;
-        unregister_code16(tap_kc);
-        return false;
     }
 
     return true;
