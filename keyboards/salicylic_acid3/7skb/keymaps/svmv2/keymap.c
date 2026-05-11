@@ -127,6 +127,7 @@ svm_config_t get_svm_params(uint16_t tap_kc) {
             return (svm_config_t){.w_x=1000, .w_y=-400, .b=-140000, .guard=250};
         case KC_A: case KC_S: case KC_D: case KC_F:
         case KC_J: case KC_K: case KC_L:
+        case KC_G: case KC_H: case KC_B: case KC_N:
             return (svm_config_t){.w_x=1000, .w_y=0, .b=-250000, .guard=250};
         default:
             return (svm_config_t){.w_x=1000, .w_y=0, .b=-200000, .guard=200};
