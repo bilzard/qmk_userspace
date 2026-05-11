@@ -35,9 +35,7 @@ qmk compile -kb salicylic_acid3/7skb -km svmv2
 
 ### 書き込み (Flash)
 
-```bash
-qmk flash -kb salicylic_acid3/7skb -km svmv2
-```
+手元の環境ではCLIコマンド(`qmk flash`)はProMicroの書き込み待機状態への遷移を検知できなかったのでQMK Toolboxを使ってください。
 
 ## 3. トラブルシューティング
 
