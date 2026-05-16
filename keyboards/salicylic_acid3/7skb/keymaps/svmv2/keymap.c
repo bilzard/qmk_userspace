@@ -287,17 +287,24 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                         // クロスハンド制約判定
                         uint16_t tap_kc = inst->keycode & 0xFF;
                         if (is_cross_hand_target(tap_kc)) {
-                            bool th_is_left = is_left_hand(inst->row);
-                            bool other_is_left = is_left_hand(record->event.key.row);
+                            // 新しく押されたキーが「純粋な文字キー」か判定する
+                            // QMKでは 0xE0 (KC_LCTL) 未満が基本的な文字・記号キー
+                            bool is_typing_key = (keycode < 0xE0);
 
-                            // ★追加: 判定に使用したRowと左右フラグの生データを出力
-                            if (DEBUG_SVM) {
-                                uprintf("SVM-CROSS: TH_Row:%d(Left:%d) vs New_Row:%d(Left:%d)\n",
-                                        inst->row, th_is_left, record->event.key.row, other_is_left);
-                            }
-                            if (th_is_left == other_is_left) {
-                                inst->force_tap = true; // 同手ならTap強制フラグを立てる
-                                if (DEBUG_SVM) uprintf("SVM: Cross-hand violated! Forced TAP. [Key:0x%04X]\n", inst->keycode);
+                            // 新しく押されたのが「文字」の場合のみ、同手ロールオーバーとして強制Tapにする
+                            // （修飾キーや他のTap-Holdキーが押された場合は免除してHoldを許容する）
+                            if (is_typing_key) {
+                                bool th_is_left = is_left_hand(inst->row);
+                                bool other_is_left = is_left_hand(record->event.key.row);
+
+                                if (DEBUG_SVM) {
+                                    uprintf("SVM-CROSS: TH_Row:%d(Left:%d) vs New_Row:%d(Left:%d)\n",
+                                            inst->row, th_is_left, record->event.key.row, other_is_left);
+                                }
+                                if (th_is_left == other_is_left) {
+                                    inst->force_tap = true; // 同手ならTap強制フラグを立てる
+                                    if (DEBUG_SVM) uprintf("SVM: Cross-hand violated! Forced TAP. [Key:0x%04X]\n", inst->keycode);
+                                }
                             }
                         }
 #endif
