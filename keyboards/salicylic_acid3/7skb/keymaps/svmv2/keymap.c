@@ -98,6 +98,7 @@ return state;
 // --- デバッグログのON/OFFスイッチ (1:ON, 0:OFF) ---
 #define DEBUG_SVM 0
 #define TRAINING_LOG 0
+#define CROSS_HAND_CONSTRAINT 1 // クロスハンド制約の有効化フラグ
 
 #define MAX_ACTIVE_TH 8
 #define SVM_BUF_SIZE 32
@@ -126,7 +127,6 @@ svm_config_t get_svm_params(uint16_t tap_kc) {
             return (svm_config_t){.w_x=1000, .w_y=0, .b=-200000, .guard=200};
     }
 }
-
 typedef struct {
     uint16_t keycode;
     uint16_t timer;
@@ -135,6 +135,11 @@ typedef struct {
     uint16_t y;
     uint16_t timeout;
     bool     is_hold;
+
+    // for cross-hand constraint
+    uint8_t col;
+    uint8_t row;
+    bool force_tap;
 
     bool     active;
     bool     combined;
@@ -157,7 +162,23 @@ typedef struct {
 static tap_repeat_t tt_state = {0}; // ゼロ初期化
 #endif
 
-// 【新規追加】指定したキーの「押下（Press）」がバッファ内に存在するかチェックする
+// --- クロスハンド制約用ヘルパー ---
+bool is_left_hand(uint8_t row) {
+    return row <= 4; // 左手はRow 0〜4
+}
+
+bool is_cross_hand_target(uint16_t tap_kc) {
+    switch (tap_kc) {
+        // HRM（ホームローモッド）として使うキーのみを対象にする
+        case KC_A: case KC_S: case KC_D: case KC_F: case KC_G:
+        case KC_H: case KC_J: case KC_K: case KC_L: case KC_SCLN:
+            return true;
+        default:
+            return false; // 親指キー（Space等）は同手コンボを許容
+    }
+}
+
+// 指定したキーの「押下（Press）」がバッファ内に存在するかチェックする
 bool is_press_buffered(uint8_t col, uint8_t row) {
     for (uint8_t i = 0; i < buf_count; i++) {
         if (event_buffer[i].event.key.col == col &&
@@ -264,6 +285,25 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 
                     if (inst->state == ST_WAITING) {
                         inst->y = timer_elapsed(inst->timer);
+
+#if CROSS_HAND_CONSTRAINT
+                        // クロスハンド制約判定
+                        uint16_t tap_kc = inst->keycode & 0xFF;
+                        if (is_cross_hand_target(tap_kc)) {
+                            bool th_is_left = is_left_hand(inst->row);
+                            bool other_is_left = is_left_hand(record->event.key.row);
+
+                            // ★追加: 判定に使用したRowと左右フラグの生データを出力
+                            if (DEBUG_SVM) {
+                                uprintf("SVM-CROSS: TH_Row:%d(Left:%d) vs New_Row:%d(Left:%d)\n",
+                                        inst->row, th_is_left, record->event.key.row, other_is_left);
+                            }
+                            if (th_is_left == other_is_left) {
+                                inst->force_tap = true; // 同手ならTap強制フラグを立てる
+                                if (DEBUG_SVM) uprintf("SVM: Cross-hand violated! Forced TAP. [Key:0x%04X]\n", inst->keycode);
+                            }
+                        }
+#endif
                     }
                 }
             }
@@ -351,6 +391,9 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                     .y = 0xFFFF,
                     .timeout = params.guard,
                     .is_hold = true,
+                    .col = record->event.key.col,
+                    .row = record->event.key.row,
+                    .force_tap = false,
                     .active = true,
                     .combined = false,
                     .state = ST_WAITING,
@@ -440,13 +483,28 @@ void matrix_scan_user(void) {
             svm_config_t params = get_svm_params(tap_kc);
             bool settle_now = false;
 
-            // 1. 両方確定している場合 (即時決着)
-            if (inst->x != 0xFFFF && inst->y != 0xFFFF) {
+#if CROSS_HAND_CONSTRAINT
+            // 1. クロスハンド制約による即時決着
+            if (inst->force_tap) {
+                inst->is_hold = false;
+                settle_now = true;
+            }
+#else
+            if (false) {} // ダミー条件（クロスハンド制約を完全にオフにするため）
+#endif
+            // 2. 両方確定している場合 (即時決着)
+            else if (inst->x != 0xFFFF && inst->y != 0xFFFF) {
                 int32_t score = get_svm_score(tap_kc, inst->x, inst->y);
                 inst->is_hold = (score > 0);
                 settle_now = true;
+
+                // ★追加: SVMに渡された x, y と最終スコアを出力
+                if (DEBUG_SVM) {
+                    uprintf("SVM-SCORE: X:%dms, Y:%dms -> Score:%d (Hold:%d)\n",
+                            inst->x, inst->y, score, inst->is_hold);
+                }
             }
-            // 2. Xのみ確定 (Release後、未コンボ)
+            // 3. Xのみ確定 (Release後、未コンボ)
             else if (inst->x != 0xFFFF) {
 #if TAP_NON_OVERLAPPED
                 inst->timeout = MIN_WAIT_TIME;
@@ -462,7 +520,7 @@ void matrix_scan_user(void) {
                 inst->is_hold = false;
                 if (t >= inst->timeout) settle_now = true;
             }
-            // 3. Yのみ確定 (Press後、未リリース)
+            // 4. Yのみ確定 (Press後、未リリース)
             else if (inst->y != 0xFFFF) {
                 if (params.w_x == 0) {
                     inst->timeout = MIN_WAIT_TIME;
@@ -474,7 +532,7 @@ void matrix_scan_user(void) {
                 inst->is_hold = true;
                 if (t >= inst->timeout) settle_now = true;
             }
-            // 4. 何も起きていない (単なる待機)
+            // 5. 何も起きていない (単なる待機)
             else {
                 if (t >= inst->timeout) settle_now = true;
             }
