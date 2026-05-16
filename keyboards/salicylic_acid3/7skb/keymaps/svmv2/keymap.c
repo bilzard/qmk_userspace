@@ -236,7 +236,6 @@ void settle_instance(uint8_t inst_idx, bool as_hold) {
         inst->state = ST_HOLDING;
         execute_dynamic_hold(inst->keycode, true);
         if (DEBUG_SVM) uprintf("SVM: Fixed as HOLD [Key:0x%04X, TapKC:0x%02X]\n", inst->keycode, tap_kc);
-        replay_buffer();
     } else {
         register_code16(tap_kc);
         inst->active = false;
@@ -246,8 +245,6 @@ void settle_instance(uint8_t inst_idx, bool as_hold) {
         tt_state.last_tap_keycode = inst->keycode;
         tt_state.last_tap_time = timer_read();
 #endif
-
-        replay_buffer();
         unregister_code16(tap_kc);
     }
 }
@@ -334,7 +331,6 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                         }
                         tt_state.last_tap_time = actual_time;
 #endif
-                        replay_buffer();
                         unregister_code16(tap_kc);
                     } else {
                         // 【コンボ後】ここでは離さず、余韻フェーズへ送る！
@@ -484,27 +480,19 @@ void matrix_scan_user(void) {
             bool settle_now = false;
 
 #if CROSS_HAND_CONSTRAINT
-            // 1. クロスハンド制約による即時決着
             if (inst->force_tap) {
                 inst->is_hold = false;
                 settle_now = true;
             }
 #else
-            if (false) {} // ダミー条件（クロスハンド制約を完全にオフにするため）
+            if (false) {}
 #endif
-            // 2. 両方確定している場合 (即時決着)
             else if (inst->x != 0xFFFF && inst->y != 0xFFFF) {
                 int32_t score = get_svm_score(tap_kc, inst->x, inst->y);
                 inst->is_hold = (score > 0);
                 settle_now = true;
-
-                // ★追加: SVMに渡された x, y と最終スコアを出力
-                if (DEBUG_SVM) {
-                    uprintf("SVM-SCORE: X:%dms, Y:%dms -> Score:%d (Hold:%d)\n",
-                            inst->x, inst->y, score, inst->is_hold);
-                }
+                if (DEBUG_SVM) uprintf("SVM-SCORE: X:%dms, Y:%dms -> Score:%d (Hold:%d)\n", inst->x, inst->y, score, inst->is_hold);
             }
-            // 3. Xのみ確定 (Release後、未コンボ)
             else if (inst->x != 0xFFFF) {
 #if TAP_NON_OVERLAPPED
                 inst->timeout = MIN_WAIT_TIME;
@@ -520,7 +508,6 @@ void matrix_scan_user(void) {
                 inst->is_hold = false;
                 if (t >= inst->timeout) settle_now = true;
             }
-            // 4. Yのみ確定 (Press後、未リリース)
             else if (inst->y != 0xFFFF) {
                 if (params.w_x == 0) {
                     inst->timeout = MIN_WAIT_TIME;
@@ -532,30 +519,40 @@ void matrix_scan_user(void) {
                 inst->is_hold = true;
                 if (t >= inst->timeout) settle_now = true;
             }
-            // 5. 何も起きていない (単なる待機)
             else {
                 if (t >= inst->timeout) settle_now = true;
             }
 
             // --- 確定の執行 ---
             if (settle_now) {
-                settle_instance(i, inst->is_hold);
-                if (DEBUG_SVM) uprintf("SVM: Timeout! Settled as %s [Key:0x%04X, X:%dms, Y:%dms]\n", inst->is_hold ? "HOLD" : "TAP", inst->keycode, inst->x, inst->y);
+                bool was_hold = inst->is_hold;
+                settle_instance(i, was_hold);
 
-                // 【最大のスタック原因の解消】
-                // Holdとして確定したが、すでに物理的な指が離されている場合！
-                if (inst->is_hold && inst->x != 0xFFFF) {
-                    // Releaseイベントはもう来ないので、強制的に余韻フェーズへ送る
+                if (DEBUG_SVM) uprintf("SVM: Timeout! Settled as %s [Key:0x%04X]\n", was_hold ? "HOLD" : "TAP", inst->keycode);
+
+                if (was_hold && inst->x != 0xFFFF) {
                     inst->state = ST_RELEASING;
                     inst->timer = timer_read();
                 }
             }
-        }
+        } // <=== 【超重要】 ST_WAITING を閉じるカッコは絶対にここ！
+
         else if (inst->state == ST_RELEASING) {
+            if (is_any_th_waiting()) {
+                inst->timer = timer_read();
+                continue;
+            }
             if (timer_elapsed(inst->timer) > HOLD_RELEASE_DELAY) {
                 execute_dynamic_hold(inst->keycode, false);
                 inst->active = false;
+                if (DEBUG_SVM) uprintf("SVM: HOLD safely released [Key:0x%04X]\n", inst->keycode);
             }
         }
+    } // forループ終わり
+
+    // --- ★アーキテクチャの真髄: 状態ベースのバッファ自動再生 ---
+    // バッファに中身があり、誰も迷っておらず、現在リプレイ中でなければ問答無用で再生する
+    if (buf_count > 0 && !is_any_th_waiting() && !is_replaying) {
+        replay_buffer();
     }
 }
