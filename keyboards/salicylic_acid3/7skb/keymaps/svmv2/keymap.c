@@ -66,33 +66,6 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
   )
 };
 
-//A description for expressing the layer position in LED mode.
-layer_state_t layer_state_set_user(layer_state_t state) {
-#ifdef RGBLIGHT_ENABLE
-    // 現在の最高位レイヤーを取得
-    uint8_t layer = get_highest_layer(state);
-
-    switch (layer) {
-    case _LAYER1:
-      rgblight_sethsv_noeeprom(HSV_BLUE);   // FNレイヤーは青
-      break;
-    case _LAYER2:
-      rgblight_sethsv_noeeprom(HSV_PURPLE); // ADJUSTレイヤーは紫
-      break;
-    case _LAYER3:
-      rgblight_sethsv_noeeprom(HSV_GREEN);  // FKEYレイヤーは緑
-      break;
-    case _LAYER4:
-      rgblight_sethsv_noeeprom(HSV_YELLOW); // LAYER4は黄色
-      break;
-    default: // QWERTYレイヤー（デフォルト）
-      rgblight_sethsv_noeeprom(0, 0, 0);    // 消灯
-      break;
-    }
-#endif
-return state;
-}
-
 #include "print.h"
 
 // --- デバッグログのON/OFFスイッチ (1:ON, 0:OFF) ---
