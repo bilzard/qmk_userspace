@@ -148,7 +148,12 @@ typedef struct {
 } th_instance_t;
 
 static th_instance_t th_instances[MAX_ACTIVE_TH];
-static keyrecord_t event_buffer[SVM_BUF_SIZE];
+typedef struct {
+    keyrecord_t record;
+    uint16_t keycode;
+} svm_event_t;
+static svm_event_t event_buffer[SVM_BUF_SIZE];
+
 static uint8_t buf_count = 0;
 static bool is_replaying = false;
 
@@ -206,9 +211,9 @@ bool is_pure_typing_key(uint16_t keycode) {
 // 指定したキーの「押下（Press）」がバッファ内に存在するかチェックする
 bool is_press_buffered(uint8_t col, uint8_t row) {
     for (uint8_t i = 0; i < buf_count; i++) {
-        if (event_buffer[i].event.key.col == col &&
-            event_buffer[i].event.key.row == row &&
-            event_buffer[i].event.pressed) {
+        if (event_buffer[i].record.event.key.col == col &&
+            event_buffer[i].record.event.key.row == row &&
+            event_buffer[i].record.event.pressed) {
             return true;
         }
     }
@@ -224,39 +229,44 @@ bool is_any_th_waiting(void) {
 void replay_buffer(void) {
     if (is_replaying || is_any_th_waiting()) return;
     is_replaying = true;
-
     if (buf_count > 0 && DEBUG_SVM) {
         uprintf("SVM: Replaying %d events\n", buf_count);
     }
 
     uint8_t i = 0;
     while (i < buf_count) {
-        keyrecord_t record = event_buffer[i];
+        svm_event_t current_event = event_buffer[i];
         if (DEBUG_SVM) uprintf("SVM:   Replay Event [Col:%d Row:%d], Pressed:%d\n",
-                               record.event.key.col,
-                               record.event.key.row,
-                               record.event.pressed);
+                            current_event.record.event.key.col,
+                            current_event.record.event.key.row,
+                            current_event.record.event.pressed);
 
-        // QMKのコア処理へイベントを投げる
-        process_record(&record);
+        process_record(&(current_event.record));
         i++;
 
-        // 【究極の修正】
-        // もし投げたイベントがTHキーで「WAITING」状態に入った場合、
-        // レイヤー遷移などの確定を待つため、後続のリプレイをここで一時停止（ポーズ）する。
-        if (is_any_th_waiting()) {
-            if (DEBUG_SVM) uprintf("SVM: Replay paused at event %d\n", i);
-            break;
+        // 【追加】ポーズ条件の厳格化
+        if (current_event.record.event.pressed && is_any_th_waiting()) {
+            bool release_found_in_buffer = false;
+            for (uint8_t j = i; j < buf_count; j++) {
+                if (event_buffer[j].record.event.key.col == current_event.record.event.key.col &&
+                    event_buffer[j].record.event.key.row == current_event.record.event.key.row &&
+                    !event_buffer[j].record.event.pressed) {
+                    release_found_in_buffer = true;
+                    break;
+                }
+            }
+            if (!release_found_in_buffer) {
+                if (DEBUG_SVM) uprintf("SVM: Replay paused at event %d\n", i);
+                break;
+            }
         }
     }
 
-    // リプレイされなかった残りのイベントをバッファの先頭に詰める
     uint8_t remaining = buf_count - i;
     for (uint8_t j = 0; j < remaining; j++) {
         event_buffer[j] = event_buffer[i + j];
     }
     buf_count = remaining;
-
     is_replaying = false;
 }
 
@@ -393,7 +403,9 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         // 【究極の修正】Pressイベント、またはバッファ内にPressが存在するReleaseイベントのみバッファリングする
         if (record->event.pressed || is_press_buffered(record->event.key.col, record->event.key.row)) {
             if (buf_count < SVM_BUF_SIZE) {
-                event_buffer[buf_count++] = *record;
+                event_buffer[buf_count].record = *record;
+                event_buffer[buf_count].keycode = keycode;
+                buf_count++;
                 if (DEBUG_SVM) uprintf("SVM: Buffered Col:%d Row:%d Pressed:%d (count=%d)\n", record->event.key.col, record->event.key.row, record->event.pressed, buf_count);
                 return false;
             } else {
@@ -519,6 +531,30 @@ void matrix_scan_user(void) {
         th_instance_t *inst = &th_instances[i];
 
         if (inst->state == ST_WAITING) {
+            if (!inst->combined && buf_count > 0) {
+                for (uint8_t j = 0; j < buf_count; j++) {
+                    // バッファ内で自分より未来に押されたPressイベントを探す
+                    if (event_buffer[j].record.event.pressed && event_buffer[j].record.event.time >= inst->timer) {
+                        inst->combined = true;
+                        inst->y = (uint16_t)(event_buffer[j].record.event.time - inst->timer);
+
+#if CROSS_HAND_CONSTRAINT
+                        if (is_cross_hand_target(inst->keycode)) {
+                            if (is_pure_typing_key(event_buffer[j].keycode)) {
+                                bool th_is_left = is_left_hand(inst->row);
+                                bool other_is_left = is_left_hand(event_buffer[j].record.event.key.row);
+                                if (th_is_left == other_is_left) {
+                                    inst->force_tap = true;
+                                    if (DEBUG_SVM) uprintf("SVM: Peeked Cross-hand violated! Forced TAP. [Key:0x%04X]\n", inst->keycode);
+                                }
+                            }
+                        }
+#endif
+                        if (DEBUG_SVM) uprintf("SVM: Peeked buffer for Y! [Y:%dms]\n", inst->y);
+                        break;
+                    }
+                }
+            }
             uint16_t t = timer_elapsed(inst->timer);
             uint16_t tap_kc = inst->keycode & 0xFF;
             svm_config_t params = get_svm_params(tap_kc);
