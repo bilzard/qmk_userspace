@@ -168,6 +168,11 @@ bool is_left_hand(uint8_t row) {
     return row <= 4; // 左手はRow 0〜4
 }
 
+// 指定したインスタンスと、現在のキーイベントが「物理的に同じキー」かを判定する
+bool is_same_physical_key(th_instance_t *inst, keyrecord_t *record) {
+    return (inst->col == record->event.key.col && inst->row == record->event.key.row);
+}
+
 bool is_cross_hand_target(uint16_t keycode) {
     // Layer-Tapの場合、移動先のレイヤー番号によって判定を変える
     if (IS_QK_LAYER_TAP(keycode)) {
@@ -295,12 +300,12 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if (record->event.pressed) {
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
             th_instance_t *inst = &th_instances[i];
-            if (inst->active && inst->keycode != keycode) {
+            if (inst->active && !is_same_physical_key(inst, record)) {
                 if (inst->state == ST_WAITING || inst->state == ST_HOLDING) {
                     inst->combined = true;
 
                     if (inst->state == ST_WAITING) {
-                        inst->y = timer_elapsed(inst->timer);
+                        inst->y = (uint16_t)(record->event.time - inst->timer);
 
 #if CROSS_HAND_CONSTRAINT
                         if (is_cross_hand_target(inst->keycode)) {
@@ -330,11 +335,11 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if (!record->event.pressed) {
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
             th_instance_t *inst = &th_instances[i];
-            if (inst->active && inst->keycode == keycode) {
+            if (inst->active && is_same_physical_key(inst, record)) {
                 uint16_t tap_kc = keycode & 0xFF;
 
                 if (inst->state == ST_WAITING) {
-                    inst->x = timer_elapsed(inst->timer);
+                    inst->x = (uint16_t)(record->event.time - inst->timer);
                 }
                 else if (inst->state == ST_HOLDING) {
                     if (!inst->combined) {
@@ -400,7 +405,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                 svm_config_t params = get_svm_params(keycode & 0xFF);
                 th_instances[i] = (th_instance_t){
                     .keycode = keycode,
-                    .timer = timer_read(),
+                    .timer = record->event.time,
                     .x = 0xFFFF,
                     .y = 0xFFFF,
                     .timeout = params.guard,
