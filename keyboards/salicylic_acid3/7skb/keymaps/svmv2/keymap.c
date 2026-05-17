@@ -118,9 +118,9 @@ svm_config_t get_svm_params(uint16_t tap_kc) {
     switch (tap_kc) {
         case KC_TAB: case KC_BSPC: case KC_SPC: case KC_ENT:
             return (svm_config_t){.w_x=1000, .w_y=-290, .b=-108677, .guard=250};
-        case KC_A: case KC_SEMICOLON:
+        case KC_SEMICOLON: case KC_Z:
             return (svm_config_t){.w_x=1000, .w_y=-175, .b=-127712, .guard=250};
-        case KC_S: case KC_D: case KC_F: case KC_G:
+        case KC_A: case KC_S: case KC_D: case KC_F: case KC_G:
         case KC_H: case KC_J: case KC_K: case KC_L:
         case KC_W: case KC_O:
             return (svm_config_t){.w_x=1000, .w_y=0, .b=-250000, .guard=250};
