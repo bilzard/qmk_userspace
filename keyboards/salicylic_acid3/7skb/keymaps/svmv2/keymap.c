@@ -224,17 +224,39 @@ bool is_any_th_waiting(void) {
 void replay_buffer(void) {
     if (is_replaying || is_any_th_waiting()) return;
     is_replaying = true;
+
     if (buf_count > 0 && DEBUG_SVM) {
         uprintf("SVM: Replaying %d events\n", buf_count);
     }
-    for (uint8_t i = 0; i < buf_count; i++) {
+
+    uint8_t i = 0;
+    while (i < buf_count) {
+        keyrecord_t record = event_buffer[i];
         if (DEBUG_SVM) uprintf("SVM:   Replay Event [Col:%d Row:%d], Pressed:%d\n",
-                               event_buffer[i].event.key.col,
-                               event_buffer[i].event.key.row,
-                               event_buffer[i].event.pressed);
-        process_record(&event_buffer[i]);
+                               record.event.key.col,
+                               record.event.key.row,
+                               record.event.pressed);
+
+        // QMKのコア処理へイベントを投げる
+        process_record(&record);
+        i++;
+
+        // 【究極の修正】
+        // もし投げたイベントがTHキーで「WAITING」状態に入った場合、
+        // レイヤー遷移などの確定を待つため、後続のリプレイをここで一時停止（ポーズ）する。
+        if (is_any_th_waiting()) {
+            if (DEBUG_SVM) uprintf("SVM: Replay paused at event %d\n", i);
+            break;
+        }
     }
-    buf_count = 0;
+
+    // リプレイされなかった残りのイベントをバッファの先頭に詰める
+    uint8_t remaining = buf_count - i;
+    for (uint8_t j = 0; j < remaining; j++) {
+        event_buffer[j] = event_buffer[i + j];
+    }
+    buf_count = remaining;
+
     is_replaying = false;
 }
 
