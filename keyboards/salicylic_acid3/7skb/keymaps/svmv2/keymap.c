@@ -168,15 +168,20 @@ bool is_left_hand(uint8_t row) {
     return row <= 4; // 左手はRow 0〜4
 }
 
-bool is_cross_hand_target(uint16_t tap_kc) {
-    switch (tap_kc) {
-        // HRM（ホームローモッド）として使うキーのみを対象にする
-        case KC_A: case KC_S: case KC_D: case KC_F: case KC_G:
-        case KC_H: case KC_J: case KC_K: case KC_L: case KC_SCLN:
-            return true;
-        default:
-            return false; // 親指キー（Space等）は同手コンボを許容
+bool is_cross_hand_target(uint16_t keycode) {
+    // Layer-Tapの場合、移動先のレイヤー番号によって判定を変える
+    if (IS_QK_LAYER_TAP(keycode)) {
+        uint8_t target_layer = (keycode >> 8) & 0x0F;
+
+        // カーソルやマウス操作など、片手で完結させたいレイヤーは除外（Holdを許容）
+        if (target_layer == _LAYER3 || target_layer == _LAYER4) {
+            return false;
+        }
+        // それ以外のレイヤー（記号レイヤーなど）はタイピング中に誤爆しやすいなら true にする
+        return true;
     }
+
+    return false; // 上記以外は対象外
 }
 
 // 新しく押されたキーが「純粋な文字入力キー」かどうかを判定する
@@ -299,10 +304,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                         inst->y = timer_elapsed(inst->timer);
 
 #if CROSS_HAND_CONSTRAINT
-                        // クロスハンド制約判定
-                        uint16_t tap_kc = inst->keycode & 0xFF;
-                        if (is_cross_hand_target(tap_kc)) {
-
+                        if (is_cross_hand_target(inst->keycode)) {
                             // 新しく押されたのが純粋な「文字キー」の場合のみ、同手強制Tapを発動させる
                             if (is_pure_typing_key(keycode)) {
                                 bool th_is_left = is_left_hand(inst->row);
