@@ -179,6 +179,20 @@ bool is_cross_hand_target(uint16_t tap_kc) {
     }
 }
 
+// 新しく押されたキーが「純粋な文字入力キー」かどうかを判定する
+bool is_pure_typing_key(uint16_t keycode) {
+    // 修飾キー単体、Mod-Tap、Layer-Tap はタイピングではない（修飾の意図）
+    if (IS_QK_MODS(keycode) || IS_QK_MOD_TAP(keycode) || IS_QK_LAYER_TAP(keycode)) {
+        return false;
+    }
+    // 基本的な文字キー（A〜Z、数字、記号など）
+    if (IS_QK_BASIC(keycode)) {
+        return true;
+    }
+    // その他のキー（マクロや特殊キーなど）はとりあえずタイピング扱いとする
+    return true;
+ }
+
 // 指定したキーの「押下（Press）」がバッファ内に存在するかチェックする
 bool is_press_buffered(uint8_t col, uint8_t row) {
     for (uint8_t i = 0; i < buf_count; i++) {
@@ -288,13 +302,9 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                         // クロスハンド制約判定
                         uint16_t tap_kc = inst->keycode & 0xFF;
                         if (is_cross_hand_target(tap_kc)) {
-                            // 新しく押されたキーが「純粋な文字キー」か判定する
-                            // QMKでは 0xE0 (KC_LCTL) 未満が基本的な文字・記号キー
-                            bool is_typing_key = (keycode < 0xE0);
 
-                            // 新しく押されたのが「文字」の場合のみ、同手ロールオーバーとして強制Tapにする
-                            // （修飾キーや他のTap-Holdキーが押された場合は免除してHoldを許容する）
-                            if (is_typing_key) {
+                            // 新しく押されたのが純粋な「文字キー」の場合のみ、同手強制Tapを発動させる
+                            if (is_pure_typing_key(keycode)) {
                                 bool th_is_left = is_left_hand(inst->row);
                                 bool other_is_left = is_left_hand(record->event.key.row);
 
