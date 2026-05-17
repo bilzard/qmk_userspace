@@ -257,7 +257,7 @@ void settle_instance(uint8_t inst_idx, bool as_hold) {
         execute_dynamic_hold(inst->keycode, true);
         if (DEBUG_SVM) uprintf("SVM: Fixed as HOLD [Key:0x%04X, TapKC:0x%02X]\n", inst->keycode, tap_kc);
     } else {
-        register_code16(tap_kc);
+        tap_code16(tap_kc);
         inst->active = false;
         if (DEBUG_SVM) uprintf("SVM: Fixed as TAP [Key:0x%04X, TapKC:0x%02X]\n", inst->keycode, tap_kc);
 
@@ -265,7 +265,6 @@ void settle_instance(uint8_t inst_idx, bool as_hold) {
         tt_state.last_tap_keycode = inst->keycode;
         tt_state.last_tap_time = timer_read();
 #endif
-        unregister_code16(tap_kc);
     }
 }
 
@@ -341,7 +340,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                     if (!inst->combined) {
                         // 【Retro Tap】単独長押しなのでここで即座に離す
                         execute_dynamic_hold(keycode, false);
-                        register_code16(tap_kc);
+                        tap_code16(tap_kc);
                         inst->active = false;
 #if TAPPING_TOGGLE_TERM > 0
                         tt_state.last_tap_keycode = inst->keycode;
@@ -351,7 +350,6 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
                         }
                         tt_state.last_tap_time = actual_time;
 #endif
-                        unregister_code16(tap_kc);
                     } else {
                         // 【コンボ後】ここでは離さず、余韻フェーズへ送る！
                         inst->state = ST_RELEASING;
