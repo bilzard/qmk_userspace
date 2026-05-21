@@ -15,6 +15,9 @@ compile_commands.json
 .clangd/
 .cache/
 
+# Claude Code (local machine-specific settings)
+.claude/settings.local.json
+
 # user
 logs/
 *.log
