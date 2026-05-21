@@ -507,6 +507,14 @@ static void peek_buffer_for_y(th_instance_t *inst) {
     }
 }
 
+static uint16_t compute_dynamic_timeout(int32_t w_num, uint16_t val, int32_t w_den, int32_t b, uint16_t guard) {
+    if (w_den == 0) return MIN_WAIT_TIME;
+    int32_t t = -(w_num * val + b) / w_den;
+    if (t < MIN_WAIT_TIME) return MIN_WAIT_TIME;
+    if (t > guard)         return guard;
+    return (uint16_t)t;
+}
+
 static void process_waiting(uint8_t i) {
     th_instance_t *inst = &th_instances[i];
 
@@ -518,46 +526,26 @@ static void process_waiting(uint8_t i) {
     bool settle_now = false;
 
 #if CROSS_HAND_CONSTRAINT
-    if (inst->force_tap) {
-        inst->is_hold = false;
-        settle_now = true;
-    }
-#else
-    if (false) {}
+    if (inst->force_tap) { inst->is_hold = false; settle_now = true; } else
 #endif
-    else if (inst->x != 0xFFFF && inst->y != 0xFFFF) {
+    if (inst->x != 0xFFFF && inst->y != 0xFFFF) {
         int32_t score = get_svm_score(tap_kc, inst->x, inst->y);
         inst->is_hold = (score > 0);
         settle_now = true;
         if (DEBUG_SVM) uprintf("SVM-SCORE: X:%dms, Y:%dms -> Score:%d (Hold:%d)\n", inst->x, inst->y, score, inst->is_hold);
-    }
-    else if (inst->x != 0xFFFF) {
+    } else if (inst->x != 0xFFFF) {
 #if TAP_NON_OVERLAPPED
         inst->timeout = MIN_WAIT_TIME;
 #else
-        if (params.w_y == 0) {
-            inst->timeout = MIN_WAIT_TIME;
-        } else {
-            int32_t timeout_svm = -(params.w_x * inst->x + params.b) / params.w_y;
-            inst->timeout = (timeout_svm < 0) ? MIN_WAIT_TIME : (timeout_svm < params.guard ? timeout_svm : params.guard);
-            inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME;
-        }
+        inst->timeout = compute_dynamic_timeout(params.w_x, inst->x, params.w_y, params.b, params.guard);
 #endif
         inst->is_hold = false;
         if (t >= inst->timeout) settle_now = true;
-    }
-    else if (inst->y != 0xFFFF) {
-        if (params.w_x == 0) {
-            inst->timeout = MIN_WAIT_TIME;
-        } else {
-            int32_t timeout_svm = -(params.w_y * inst->y + params.b) / params.w_x;
-            inst->timeout = (timeout_svm < 0) ? MIN_WAIT_TIME : (timeout_svm < params.guard ? timeout_svm : params.guard);
-            inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME;
-        }
+    } else if (inst->y != 0xFFFF) {
+        inst->timeout = compute_dynamic_timeout(params.w_y, inst->y, params.w_x, params.b, params.guard);
         inst->is_hold = true;
         if (t >= inst->timeout) settle_now = true;
-    }
-    else {
+    } else {
         if (t >= inst->timeout) settle_now = true;
     }
 
