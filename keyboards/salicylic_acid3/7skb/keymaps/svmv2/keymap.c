@@ -1,6 +1,10 @@
 #include <stdint.h>
 #include QMK_KEYBOARD_H
 
+// ============================================================================
+// Keymap Layers
+// ============================================================================
+
 // 1. レイヤーの定義を5枚（0-4）に合わせる
 enum layer_number {
   _QWERTY = 0,
@@ -60,6 +64,10 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 
 #include "print.h"
 
+// ============================================================================
+// Configuration
+// ============================================================================
+
 // --- デバッグログのON/OFFスイッチ (1:ON, 0:OFF) ---
 #define DEBUG_SVM 0
 #define TRAINING_LOG 0
@@ -71,6 +79,10 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 #define HOLD_RELEASE_DELAY 30 // Hold→Releaseに移行するまでの猶予時間（ms）
 #define MIN_WAIT_TIME 50 // 待機状態とみなす最低時間（ms）
 #define TAP_NON_OVERLAPPED false // 重なりがない連続したキー入力を即時にタップとみなす
+
+// ============================================================================
+// SVM Parameters
+// ============================================================================
 
 typedef struct {
     int32_t w_x;
@@ -93,6 +105,10 @@ svm_config_t get_svm_params(uint16_t tap_kc) {
             return (svm_config_t){.w_x=1000, .w_y=0, .b=-200000, .guard=200};
     }
 }
+// ============================================================================
+// T&H State
+// ============================================================================
+
 typedef struct {
     uint16_t keycode;
     uint16_t timer;
@@ -132,6 +148,10 @@ typedef struct {
 
 static tap_repeat_t tt_state = {0}; // ゼロ初期化
 #endif
+
+// ============================================================================
+// Helpers: Key Classification
+// ============================================================================
 
 // --- クロスハンド制約用ヘルパー ---
 bool is_left_hand(uint8_t row) {
@@ -185,6 +205,10 @@ bool is_press_buffered(uint8_t col, uint8_t row) {
     return false;
 }
 
+// ============================================================================
+// Event Buffer: Operations
+// ============================================================================
+
 bool is_any_th_waiting(void) {
     for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++)
         if (th_instances[i].active && th_instances[i].state == ST_WAITING) return true;
@@ -235,6 +259,10 @@ void replay_buffer(void) {
     is_replaying = false;
 }
 
+// ============================================================================
+// T&H Action Execution
+// ============================================================================
+
 void execute_dynamic_hold(uint16_t keycode, bool pressed) {
     if (IS_QK_MOD_TAP(keycode)) {
         uint8_t mod_code = (keycode >> 8) & 0x1F;
@@ -269,6 +297,10 @@ void settle_instance(uint8_t inst_idx, bool as_hold) {
 #endif
     }
 }
+
+// ============================================================================
+// Event Handlers (process_record_user helpers)
+// ============================================================================
 
 static void handle_other_key_press(uint16_t keycode, keyrecord_t *record) {
     for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
@@ -397,6 +429,10 @@ static bool hook_new_th(uint16_t keycode, keyrecord_t *record) {
     return false;
 }
 
+// ============================================================================
+// Entry: process_record_user
+// ============================================================================
+
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if (DEBUG_SVM) {
         uprintf("SVM-HOOK: [C:%d R:%d] %s KC:0x%04X\n",
@@ -427,6 +463,10 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     return true;
 }
 
+// ============================================================================
+// SVM Scoring
+// ============================================================================
+
 int32_t get_svm_score(uint16_t tap_kc, uint16_t x, uint16_t y) {
     svm_config_t params = get_svm_params(tap_kc);
 
@@ -443,6 +483,10 @@ int32_t get_svm_score(uint16_t tap_kc, uint16_t x, uint16_t y) {
     return svm_score;
 #endif
 }
+
+// ============================================================================
+// Training Log (Debug)
+// ============================================================================
 
 #if TRAINING_LOG > 0
 #include "print.h"
@@ -482,6 +526,10 @@ void training_log(void) {
     }
 }
 #endif
+
+// ============================================================================
+// T&H State Handlers (matrix_scan_user helpers)
+// ============================================================================
 
 static void peek_buffer_for_y(th_instance_t *inst) {
     if (inst->combined || buf_count == 0) return;
@@ -572,6 +620,10 @@ static void process_releasing(uint8_t i) {
         if (DEBUG_SVM) uprintf("SVM: HOLD safely released [Key:0x%04X]\n", inst->keycode);
     }
 }
+
+// ============================================================================
+// Entry: matrix_scan_user
+// ============================================================================
 
 void matrix_scan_user(void) {
 #if TRAINING_LOG > 0
