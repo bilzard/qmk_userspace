@@ -483,6 +483,108 @@ void training_log(void) {
 }
 #endif
 
+static void peek_buffer_for_y(th_instance_t *inst) {
+    if (inst->combined || buf_count == 0) return;
+    for (uint8_t j = 0; j < buf_count; j++) {
+        if (!event_buffer[j].record.event.pressed) continue;
+        if (event_buffer[j].record.event.time < inst->timer) continue;
+
+        inst->combined = true;
+        inst->y = (uint16_t)(event_buffer[j].record.event.time - inst->timer);
+
+#if CROSS_HAND_CONSTRAINT
+        if (is_cross_hand_target(inst->keycode) && is_pure_typing_key(event_buffer[j].keycode)) {
+            bool th_is_left = is_left_hand(inst->row);
+            bool other_is_left = is_left_hand(event_buffer[j].record.event.key.row);
+            if (th_is_left == other_is_left) {
+                inst->force_tap = true;
+                if (DEBUG_SVM) uprintf("SVM: Peeked Cross-hand violated! Forced TAP. [Key:0x%04X]\n", inst->keycode);
+            }
+        }
+#endif
+        if (DEBUG_SVM) uprintf("SVM: Peeked buffer for Y! [Y:%dms]\n", inst->y);
+        break;
+    }
+}
+
+static void process_waiting(uint8_t i) {
+    th_instance_t *inst = &th_instances[i];
+
+    peek_buffer_for_y(inst);
+
+    uint16_t t = timer_elapsed(inst->timer);
+    uint16_t tap_kc = inst->keycode & 0xFF;
+    svm_config_t params = get_svm_params(tap_kc);
+    bool settle_now = false;
+
+#if CROSS_HAND_CONSTRAINT
+    if (inst->force_tap) {
+        inst->is_hold = false;
+        settle_now = true;
+    }
+#else
+    if (false) {}
+#endif
+    else if (inst->x != 0xFFFF && inst->y != 0xFFFF) {
+        int32_t score = get_svm_score(tap_kc, inst->x, inst->y);
+        inst->is_hold = (score > 0);
+        settle_now = true;
+        if (DEBUG_SVM) uprintf("SVM-SCORE: X:%dms, Y:%dms -> Score:%d (Hold:%d)\n", inst->x, inst->y, score, inst->is_hold);
+    }
+    else if (inst->x != 0xFFFF) {
+#if TAP_NON_OVERLAPPED
+        inst->timeout = MIN_WAIT_TIME;
+#else
+        if (params.w_y == 0) {
+            inst->timeout = MIN_WAIT_TIME;
+        } else {
+            int32_t timeout_svm = -(params.w_x * inst->x + params.b) / params.w_y;
+            inst->timeout = (timeout_svm < 0) ? MIN_WAIT_TIME : (timeout_svm < params.guard ? timeout_svm : params.guard);
+            inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME;
+        }
+#endif
+        inst->is_hold = false;
+        if (t >= inst->timeout) settle_now = true;
+    }
+    else if (inst->y != 0xFFFF) {
+        if (params.w_x == 0) {
+            inst->timeout = MIN_WAIT_TIME;
+        } else {
+            int32_t timeout_svm = -(params.w_y * inst->y + params.b) / params.w_x;
+            inst->timeout = (timeout_svm < 0) ? MIN_WAIT_TIME : (timeout_svm < params.guard ? timeout_svm : params.guard);
+            inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME;
+        }
+        inst->is_hold = true;
+        if (t >= inst->timeout) settle_now = true;
+    }
+    else {
+        if (t >= inst->timeout) settle_now = true;
+    }
+
+    if (settle_now) {
+        bool was_hold = inst->is_hold;
+        settle_instance(i, was_hold);
+        if (DEBUG_SVM) uprintf("SVM: Timeout! Settled as %s [Key:0x%04X]\n", was_hold ? "HOLD" : "TAP", inst->keycode);
+        if (was_hold && inst->x != 0xFFFF) {
+            inst->state = ST_RELEASING;
+            inst->timer = timer_read();
+        }
+    }
+}
+
+static void process_releasing(uint8_t i) {
+    th_instance_t *inst = &th_instances[i];
+    if (is_any_th_waiting()) {
+        inst->timer = timer_read();
+        return;
+    }
+    if (timer_elapsed(inst->timer) > HOLD_RELEASE_DELAY) {
+        execute_dynamic_hold(inst->keycode, false);
+        inst->active = false;
+        if (DEBUG_SVM) uprintf("SVM: HOLD safely released [Key:0x%04X]\n", inst->keycode);
+    }
+}
+
 void matrix_scan_user(void) {
 #if TRAINING_LOG > 0
     training_log();
@@ -490,112 +592,10 @@ void matrix_scan_user(void) {
 
     for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
         if (!th_instances[i].active) continue;
+        if (th_instances[i].state == ST_WAITING)   process_waiting(i);
+        else if (th_instances[i].state == ST_RELEASING) process_releasing(i);
+    }
 
-        th_instance_t *inst = &th_instances[i];
-
-        if (inst->state == ST_WAITING) {
-            if (!inst->combined && buf_count > 0) {
-                for (uint8_t j = 0; j < buf_count; j++) {
-                    // バッファ内で自分より未来に押されたPressイベントを探す
-                    if (event_buffer[j].record.event.pressed && event_buffer[j].record.event.time >= inst->timer) {
-                        inst->combined = true;
-                        inst->y = (uint16_t)(event_buffer[j].record.event.time - inst->timer);
-
-#if CROSS_HAND_CONSTRAINT
-                        if (is_cross_hand_target(inst->keycode)) {
-                            if (is_pure_typing_key(event_buffer[j].keycode)) {
-                                bool th_is_left = is_left_hand(inst->row);
-                                bool other_is_left = is_left_hand(event_buffer[j].record.event.key.row);
-                                if (th_is_left == other_is_left) {
-                                    inst->force_tap = true;
-                                    if (DEBUG_SVM) uprintf("SVM: Peeked Cross-hand violated! Forced TAP. [Key:0x%04X]\n", inst->keycode);
-                                }
-                            }
-                        }
-#endif
-                        if (DEBUG_SVM) uprintf("SVM: Peeked buffer for Y! [Y:%dms]\n", inst->y);
-                        break;
-                    }
-                }
-            }
-            uint16_t t = timer_elapsed(inst->timer);
-            uint16_t tap_kc = inst->keycode & 0xFF;
-            svm_config_t params = get_svm_params(tap_kc);
-            bool settle_now = false;
-
-#if CROSS_HAND_CONSTRAINT
-            if (inst->force_tap) {
-                inst->is_hold = false;
-                settle_now = true;
-            }
-#else
-            if (false) {}
-#endif
-            else if (inst->x != 0xFFFF && inst->y != 0xFFFF) {
-                int32_t score = get_svm_score(tap_kc, inst->x, inst->y);
-                inst->is_hold = (score > 0);
-                settle_now = true;
-                if (DEBUG_SVM) uprintf("SVM-SCORE: X:%dms, Y:%dms -> Score:%d (Hold:%d)\n", inst->x, inst->y, score, inst->is_hold);
-            }
-            else if (inst->x != 0xFFFF) {
-#if TAP_NON_OVERLAPPED
-                inst->timeout = MIN_WAIT_TIME;
-#else
-                if (params.w_y == 0) {
-                    inst->timeout = MIN_WAIT_TIME;
-                } else {
-                    int32_t timeout_svm = -(params.w_x * inst->x + params.b) / params.w_y;
-                    inst->timeout = (timeout_svm < 0) ? MIN_WAIT_TIME : (timeout_svm < params.guard ? timeout_svm : params.guard);
-                    inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME;
-                }
-#endif
-                inst->is_hold = false;
-                if (t >= inst->timeout) settle_now = true;
-            }
-            else if (inst->y != 0xFFFF) {
-                if (params.w_x == 0) {
-                    inst->timeout = MIN_WAIT_TIME;
-                } else {
-                    int32_t timeout_svm = -(params.w_y * inst->y + params.b) / params.w_x;
-                    inst->timeout = (timeout_svm < 0) ? MIN_WAIT_TIME : (timeout_svm < params.guard ? timeout_svm : params.guard);
-                    inst->timeout = (inst->timeout > MIN_WAIT_TIME) ? inst->timeout : MIN_WAIT_TIME;
-                }
-                inst->is_hold = true;
-                if (t >= inst->timeout) settle_now = true;
-            }
-            else {
-                if (t >= inst->timeout) settle_now = true;
-            }
-
-            // --- 確定の執行 ---
-            if (settle_now) {
-                bool was_hold = inst->is_hold;
-                settle_instance(i, was_hold);
-
-                if (DEBUG_SVM) uprintf("SVM: Timeout! Settled as %s [Key:0x%04X]\n", was_hold ? "HOLD" : "TAP", inst->keycode);
-
-                if (was_hold && inst->x != 0xFFFF) {
-                    inst->state = ST_RELEASING;
-                    inst->timer = timer_read();
-                }
-            }
-        } // <=== 【超重要】 ST_WAITING を閉じるカッコは絶対にここ！
-
-        else if (inst->state == ST_RELEASING) {
-            if (is_any_th_waiting()) {
-                inst->timer = timer_read();
-                continue;
-            }
-            if (timer_elapsed(inst->timer) > HOLD_RELEASE_DELAY) {
-                execute_dynamic_hold(inst->keycode, false);
-                inst->active = false;
-                if (DEBUG_SVM) uprintf("SVM: HOLD safely released [Key:0x%04X]\n", inst->keycode);
-            }
-        }
-    } // forループ終わり
-
-    // --- ★アーキテクチャの真髄: 状態ベースのバッファ自動再生 ---
-    // バッファに中身があり、誰も迷っておらず、現在リプレイ中でなければ問答無用で再生する
     if (buf_count > 0 && !is_any_th_waiting() && !is_replaying) {
         replay_buffer();
     }
