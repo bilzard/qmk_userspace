@@ -297,34 +297,30 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if (record->event.pressed) {
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
             th_instance_t *inst = &th_instances[i];
-            if (inst->active && !is_same_physical_key(inst, record)) {
-                if (inst->state == ST_WAITING || inst->state == ST_HOLDING) {
-                    inst->combined = true;
+            if (!inst->active) continue;
+            if (is_same_physical_key(inst, record)) continue;
+            if (inst->state != ST_WAITING && inst->state != ST_HOLDING) continue;
 
-                    if (inst->state == ST_WAITING) {
-                        inst->y = (uint16_t)(record->event.time - inst->timer);
+            inst->combined = true;
+
+            if (inst->state != ST_WAITING) continue;
+
+            inst->y = (uint16_t)(record->event.time - inst->timer);
 
 #if CROSS_HAND_CONSTRAINT
-                        if (is_cross_hand_target(inst->keycode)) {
-                            // 新しく押されたのが純粋な「文字キー」の場合のみ、同手強制Tapを発動させる
-                            if (is_pure_typing_key(keycode)) {
-                                bool th_is_left = is_left_hand(inst->row);
-                                bool other_is_left = is_left_hand(record->event.key.row);
-
-                                if (DEBUG_SVM) {
-                                    uprintf("SVM-CROSS: TH_Row:%d(Left:%d) vs New_Row:%d(Left:%d)\n",
-                                            inst->row, th_is_left, record->event.key.row, other_is_left);
-                                }
-                                if (th_is_left == other_is_left) {
-                                    inst->force_tap = true; // 同手ならTap強制フラグを立てる
-                                    if (DEBUG_SVM) uprintf("SVM: Cross-hand violated! Forced TAP. [Key:0x%04X]\n", inst->keycode);
-                                }
-                            }
-                        }
-#endif
-                    }
-                }
+            if (!is_cross_hand_target(inst->keycode)) continue;
+            if (!is_pure_typing_key(keycode)) continue;
+            bool th_is_left = is_left_hand(inst->row);
+            bool other_is_left = is_left_hand(record->event.key.row);
+            if (DEBUG_SVM) {
+                uprintf("SVM-CROSS: TH_Row:%d(Left:%d) vs New_Row:%d(Left:%d)\n",
+                        inst->row, th_is_left, record->event.key.row, other_is_left);
             }
+            if (th_is_left == other_is_left) {
+                inst->force_tap = true;
+                if (DEBUG_SVM) uprintf("SVM: Cross-hand violated! Forced TAP. [Key:0x%04X]\n", inst->keycode);
+            }
+#endif
         }
     }
 
@@ -332,53 +328,51 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if (!record->event.pressed) {
         for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
             th_instance_t *inst = &th_instances[i];
-            if (inst->active && is_same_physical_key(inst, record)) {
-                uint16_t tap_kc = keycode & 0xFF;
+            if (!inst->active) continue;
+            if (!is_same_physical_key(inst, record)) continue;
 
-                if (inst->state == ST_WAITING) {
-                    inst->x = (uint16_t)(record->event.time - inst->timer);
-                }
-                else if (inst->state == ST_HOLDING) {
-                    if (!inst->combined) {
-                        // 【Retro Tap】単独長押しなのでここで即座に離す
-                        execute_dynamic_hold(keycode, false);
-                        tap_code16(tap_kc);
-                        inst->active = false;
+            uint16_t tap_kc = keycode & 0xFF;
+
+            if (inst->state == ST_WAITING) {
+                inst->x = (uint16_t)(record->event.time - inst->timer);
+            } else if (inst->state == ST_HOLDING) {
+                if (!inst->combined) {
+                    // 【Retro Tap】単独長押しなのでここで即座に離す
+                    execute_dynamic_hold(keycode, false);
+                    tap_code16(tap_kc);
+                    inst->active = false;
 #if TAPPING_TOGGLE_TERM > 0
-                        tt_state.last_tap_keycode = inst->keycode;
-                        uint16_t actual_time = inst->timer;
-                        if (inst->x != 0xFFFF) {
-                            actual_time += inst->x;
-                        }
-                        tt_state.last_tap_time = actual_time;
-#endif
-                    } else {
-                        // 【コンボ後】ここでは離さず、余韻フェーズへ送る！
-                        inst->state = ST_RELEASING;
-                        inst->timer = timer_read();
+                    tt_state.last_tap_keycode = inst->keycode;
+                    uint16_t actual_time = inst->timer;
+                    if (inst->x != 0xFFFF) {
+                        actual_time += inst->x;
                     }
+                    tt_state.last_tap_time = actual_time;
+#endif
+                } else {
+                    // 【コンボ後】ここでは離さず、余韻フェーズへ送る！
+                    inst->state = ST_RELEASING;
+                    inst->timer = timer_read();
                 }
-                return false;
             }
+            return false;
         }
     }
 
     // --- 3. バッファリング ---
     if (!is_replaying && is_any_th_waiting()) {
-        // 【究極の修正】Pressイベント、またはバッファ内にPressが存在するReleaseイベントのみバッファリングする
-        if (record->event.pressed || is_press_buffered(record->event.key.col, record->event.key.row)) {
-            if (buf_count < SVM_BUF_SIZE) {
-                event_buffer[buf_count].record = *record;
-                event_buffer[buf_count].keycode = keycode;
-                buf_count++;
-                if (DEBUG_SVM) uprintf("SVM: Buffered Col:%d Row:%d Pressed:%d (count=%d)\n", record->event.key.col, record->event.key.row, record->event.pressed, buf_count);
-                return false;
-            } else {
-                if (DEBUG_SVM) uprintf("SVM: Buffer overflow! Bypassing Key\n");
-            }
-        } else {
+        bool should_buffer = record->event.pressed || is_press_buffered(record->event.key.col, record->event.key.row);
+        if (!should_buffer) {
             // バッファに関係ないキーのリリースは即座に通してOSのキーリピート暴発を防ぐ
             if (DEBUG_SVM) uprintf("SVM: Bypassed buffer for Release Col:%d Row:%d\n", record->event.key.col, record->event.key.row);
+        } else if (buf_count < SVM_BUF_SIZE) {
+            event_buffer[buf_count].record = *record;
+            event_buffer[buf_count].keycode = keycode;
+            buf_count++;
+            if (DEBUG_SVM) uprintf("SVM: Buffered Col:%d Row:%d Pressed:%d (count=%d)\n", record->event.key.col, record->event.key.row, record->event.pressed, buf_count);
+            return false;
+        } else {
+            if (DEBUG_SVM) uprintf("SVM: Buffer overflow! Bypassing Key\n");
         }
     }
 
