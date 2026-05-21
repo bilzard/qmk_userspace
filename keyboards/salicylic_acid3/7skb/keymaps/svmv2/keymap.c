@@ -270,155 +270,159 @@ void settle_instance(uint8_t inst_idx, bool as_hold) {
     }
 }
 
+static void handle_other_key_press(uint16_t keycode, keyrecord_t *record) {
+    for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
+        th_instance_t *inst = &th_instances[i];
+        if (!inst->active) continue;
+        if (is_same_physical_key(inst, record)) continue;
+        if (inst->state != ST_WAITING && inst->state != ST_HOLDING) continue;
+
+        inst->combined = true;
+
+        if (inst->state != ST_WAITING) continue;
+
+        inst->y = (uint16_t)(record->event.time - inst->timer);
+
+#if CROSS_HAND_CONSTRAINT
+        if (!is_cross_hand_target(inst->keycode)) continue;
+        if (!is_pure_typing_key(keycode)) continue;
+        bool th_is_left = is_left_hand(inst->row);
+        bool other_is_left = is_left_hand(record->event.key.row);
+        if (DEBUG_SVM) {
+            uprintf("SVM-CROSS: TH_Row:%d(Left:%d) vs New_Row:%d(Left:%d)\n",
+                    inst->row, th_is_left, record->event.key.row, other_is_left);
+        }
+        if (th_is_left == other_is_left) {
+            inst->force_tap = true;
+            if (DEBUG_SVM) uprintf("SVM: Cross-hand violated! Forced TAP. [Key:0x%04X]\n", inst->keycode);
+        }
+#endif
+    }
+}
+
+static bool handle_th_release(uint16_t keycode, keyrecord_t *record) {
+    for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
+        th_instance_t *inst = &th_instances[i];
+        if (!inst->active) continue;
+        if (!is_same_physical_key(inst, record)) continue;
+
+        uint16_t tap_kc = keycode & 0xFF;
+
+        if (inst->state == ST_WAITING) {
+            inst->x = (uint16_t)(record->event.time - inst->timer);
+        } else if (inst->state == ST_HOLDING) {
+            if (!inst->combined) {
+                // 【Retro Tap】単独長押しなのでここで即座に離す
+                execute_dynamic_hold(keycode, false);
+                tap_code16(tap_kc);
+                inst->active = false;
+#if TAPPING_TOGGLE_TERM > 0
+                tt_state.last_tap_keycode = inst->keycode;
+                uint16_t actual_time = inst->timer;
+                if (inst->x != 0xFFFF) {
+                    actual_time += inst->x;
+                }
+                tt_state.last_tap_time = actual_time;
+#endif
+            } else {
+                // 【コンボ後】ここでは離さず、余韻フェーズへ送る！
+                inst->state = ST_RELEASING;
+                inst->timer = timer_read();
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+static bool buffer_event_if_needed(uint16_t keycode, keyrecord_t *record) {
+    if (is_replaying || !is_any_th_waiting()) return false;
+
+    bool should_buffer = record->event.pressed || is_press_buffered(record->event.key.col, record->event.key.row);
+    if (!should_buffer) {
+        // バッファに関係ないキーのリリースは即座に通してOSのキーリピート暴発を防ぐ
+        if (DEBUG_SVM) uprintf("SVM: Bypassed buffer for Release Col:%d Row:%d\n", record->event.key.col, record->event.key.row);
+        return false;
+    }
+    if (buf_count < SVM_BUF_SIZE) {
+        event_buffer[buf_count].record = *record;
+        event_buffer[buf_count].keycode = keycode;
+        buf_count++;
+        if (DEBUG_SVM) uprintf("SVM: Buffered Col:%d Row:%d Pressed:%d (count=%d)\n", record->event.key.col, record->event.key.row, record->event.pressed, buf_count);
+        return true;
+    }
+    if (DEBUG_SVM) uprintf("SVM: Buffer overflow! Bypassing Key\n");
+    return false;
+}
+
+static bool hook_new_th(uint16_t keycode, keyrecord_t *record) {
+    if (!record->event.pressed) return false;
+    if (!IS_QK_MOD_TAP(keycode) && !IS_QK_LAYER_TAP(keycode)) return false;
+
+#if TAPPING_TOGGLE_TERM > 0
+    uint16_t tap_kc = keycode & 0xFF;
+    if (tap_kc != KC_SPC) {
+        if (keycode == tt_state.last_tap_keycode && timer_elapsed(tt_state.last_tap_time) < TAPPING_TOGGLE_TERM) {
+            if (DEBUG_SVM) uprintf("SVM: Repeat Tap detected! [Key:0x%04X]\n", keycode);
+            tt_state.is_repeating = true;
+            tt_state.repeating_source_kc = keycode;
+            register_code16(tap_kc);
+            return true;
+        }
+    }
+#endif
+
+    for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
+        if (!th_instances[i].active) {
+            svm_config_t params = get_svm_params(keycode & 0xFF);
+            th_instances[i] = (th_instance_t){
+                .keycode = keycode,
+                .timer = record->event.time,
+                .x = 0xFFFF,
+                .y = 0xFFFF,
+                .timeout = params.guard,
+                .is_hold = true,
+                .col = record->event.key.col,
+                .row = record->event.key.row,
+                .force_tap = false,
+                .active = true,
+                .combined = false,
+                .state = ST_WAITING,
+            };
+            if (DEBUG_SVM) uprintf("SVM: START WAITING Key:0x%04X\n", keycode);
+            return true;
+        }
+    }
+    if (DEBUG_SVM) uprintf("SVM-ERROR: MAX_ACTIVE_TH is FULL! Dropped Key:0x%04X\n", keycode);
+    return false;
+}
+
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-    // QMKがSVMに渡してきた全イベントを強制キャプチャ
     if (DEBUG_SVM) {
         uprintf("SVM-HOOK: [C:%d R:%d] %s KC:0x%04X\n",
                 record->event.key.col, record->event.key.row, record->event.pressed ? "Press" : "Release", keycode);
     }
 
 #if TAPPING_TOGGLE_TERM > 0
-    // 1. リピート中のキーが離された時の処理
     if (!record->event.pressed && tt_state.is_repeating && keycode == tt_state.repeating_source_kc) {
         unregister_code16(keycode & 0xFF);
-        // 連続リピート可能にするため、フラグを倒して時間を更新
         tt_state.is_repeating = false;
         tt_state.last_tap_keycode = keycode;
         tt_state.last_tap_time = timer_read();
         return false;
     }
-    // 2. 違うキーが押されたら状態を全リセット
     if (record->event.pressed && keycode != tt_state.last_tap_keycode) {
-        tt_state = (tap_repeat_t){0}; // 構造体を一発で安全に初期化
+        tt_state = (tap_repeat_t){0};
     }
 #endif
 
-    // -- 1. event: other key pressed
     if (record->event.pressed) {
-        for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
-            th_instance_t *inst = &th_instances[i];
-            if (!inst->active) continue;
-            if (is_same_physical_key(inst, record)) continue;
-            if (inst->state != ST_WAITING && inst->state != ST_HOLDING) continue;
-
-            inst->combined = true;
-
-            if (inst->state != ST_WAITING) continue;
-
-            inst->y = (uint16_t)(record->event.time - inst->timer);
-
-#if CROSS_HAND_CONSTRAINT
-            if (!is_cross_hand_target(inst->keycode)) continue;
-            if (!is_pure_typing_key(keycode)) continue;
-            bool th_is_left = is_left_hand(inst->row);
-            bool other_is_left = is_left_hand(record->event.key.row);
-            if (DEBUG_SVM) {
-                uprintf("SVM-CROSS: TH_Row:%d(Left:%d) vs New_Row:%d(Left:%d)\n",
-                        inst->row, th_is_left, record->event.key.row, other_is_left);
-            }
-            if (th_is_left == other_is_left) {
-                inst->force_tap = true;
-                if (DEBUG_SVM) uprintf("SVM: Cross-hand violated! Forced TAP. [Key:0x%04X]\n", inst->keycode);
-            }
-#endif
-        }
+        handle_other_key_press(keycode, record);
+    } else if (handle_th_release(keycode, record)) {
+        return false;
     }
-
-    // -- 2. リリース処理 --
-    if (!record->event.pressed) {
-        for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
-            th_instance_t *inst = &th_instances[i];
-            if (!inst->active) continue;
-            if (!is_same_physical_key(inst, record)) continue;
-
-            uint16_t tap_kc = keycode & 0xFF;
-
-            if (inst->state == ST_WAITING) {
-                inst->x = (uint16_t)(record->event.time - inst->timer);
-            } else if (inst->state == ST_HOLDING) {
-                if (!inst->combined) {
-                    // 【Retro Tap】単独長押しなのでここで即座に離す
-                    execute_dynamic_hold(keycode, false);
-                    tap_code16(tap_kc);
-                    inst->active = false;
-#if TAPPING_TOGGLE_TERM > 0
-                    tt_state.last_tap_keycode = inst->keycode;
-                    uint16_t actual_time = inst->timer;
-                    if (inst->x != 0xFFFF) {
-                        actual_time += inst->x;
-                    }
-                    tt_state.last_tap_time = actual_time;
-#endif
-                } else {
-                    // 【コンボ後】ここでは離さず、余韻フェーズへ送る！
-                    inst->state = ST_RELEASING;
-                    inst->timer = timer_read();
-                }
-            }
-            return false;
-        }
-    }
-
-    // --- 3. バッファリング ---
-    if (!is_replaying && is_any_th_waiting()) {
-        bool should_buffer = record->event.pressed || is_press_buffered(record->event.key.col, record->event.key.row);
-        if (!should_buffer) {
-            // バッファに関係ないキーのリリースは即座に通してOSのキーリピート暴発を防ぐ
-            if (DEBUG_SVM) uprintf("SVM: Bypassed buffer for Release Col:%d Row:%d\n", record->event.key.col, record->event.key.row);
-        } else if (buf_count < SVM_BUF_SIZE) {
-            event_buffer[buf_count].record = *record;
-            event_buffer[buf_count].keycode = keycode;
-            buf_count++;
-            if (DEBUG_SVM) uprintf("SVM: Buffered Col:%d Row:%d Pressed:%d (count=%d)\n", record->event.key.col, record->event.key.row, record->event.pressed, buf_count);
-            return false;
-        } else {
-            if (DEBUG_SVM) uprintf("SVM: Buffer overflow! Bypassing Key\n");
-        }
-    }
-
-    // -- 4. 新規T&Hフック --
-    if (record->event.pressed && (IS_QK_MOD_TAP(keycode) || IS_QK_LAYER_TAP(keycode))) {
-
-#if TAPPING_TOGGLE_TERM > 0
-    // 【修正】スペースキー等、Tapの直後にHoldとして多用するキーはリピート連打の対象から外す
-    uint16_t tap_kc = keycode & 0xFF;
-    if (tap_kc != KC_SPC) { // ← KC_SPC は除外
-        if (keycode == tt_state.last_tap_keycode && timer_elapsed(tt_state.last_tap_time) < TAPPING_TOGGLE_TERM) {
-            if (DEBUG_SVM) uprintf("SVM: Repeat Tap detected! [Key:0x%04X]\n", keycode);
-            tt_state.is_repeating = true;
-            tt_state.repeating_source_kc = keycode;
-            register_code16(tap_kc);
-            return false;
-        }
-    }
-#endif
-
-        for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++) {
-            if (!th_instances[i].active) {
-                svm_config_t params = get_svm_params(keycode & 0xFF);
-                th_instances[i] = (th_instance_t){
-                    .keycode = keycode,
-                    .timer = record->event.time,
-                    .x = 0xFFFF,
-                    .y = 0xFFFF,
-                    .timeout = params.guard,
-                    .is_hold = true,
-                    .col = record->event.key.col,
-                    .row = record->event.key.row,
-                    .force_tap = false,
-                    .active = true,
-                    .combined = false,
-                    .state = ST_WAITING,
-                };
-                if (DEBUG_SVM) uprintf("SVM: START WAITING Key:0x%04X\n", keycode);
-                return false;
-            }
-        }
-        // 【追加2】ここを通る＝アクティブなT&Hキーが多すぎてトラップに失敗した
-        if (DEBUG_SVM) {
-            uprintf("SVM-ERROR: MAX_ACTIVE_TH is FULL! Dropped Key:0x%04X\n", keycode);
-        }
-    }
+    if (buffer_event_if_needed(keycode, record)) return false;
+    if (hook_new_th(keycode, record)) return false;
 
     return true;
 }
