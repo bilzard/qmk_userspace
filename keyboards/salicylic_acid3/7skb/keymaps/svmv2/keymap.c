@@ -81,7 +81,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 #define TAP_NON_OVERLAPPED false // 重なりがない連続したキー入力を即時にタップとみなす
 
 // ============================================================================
-// SVM Parameters
+// SVM Engine
 // ============================================================================
 
 typedef struct {
@@ -105,8 +105,34 @@ svm_config_t get_svm_params(uint16_t tap_kc) {
             return (svm_config_t){.w_x=1000, .w_y=0, .b=-200000, .guard=200};
     }
 }
+
+int32_t get_svm_score(uint16_t tap_kc, uint16_t x, uint16_t y) {
+    svm_config_t params = get_svm_params(tap_kc);
+
+    // 1. SVMのスコア
+    int32_t svm_score = params.w_x * x + params.w_y * y + params.b;
+
+#if TAP_NON_OVERLAPPED
+    // 2. 物理的なオーバーラップスコア (x > y ならプラス)
+    int32_t overlap_score = (int32_t)x - (int32_t)y;
+
+    // 3. 2つの式の最小値を取る (両方 >0 の場合のみプラスになる)
+    return (svm_score < overlap_score) ? svm_score : overlap_score;
+#else
+    return svm_score;
+#endif
+}
+
+static uint16_t compute_dynamic_timeout(int32_t w_num, uint16_t val, int32_t w_den, int32_t b, uint16_t guard) {
+    if (w_den == 0) return MIN_WAIT_TIME;
+    int32_t t = -(w_num * val + b) / w_den;
+    if (t < MIN_WAIT_TIME) return MIN_WAIT_TIME;
+    if (t > guard)         return guard;
+    return (uint16_t)t;
+}
+
 // ============================================================================
-// T&H State
+// T&H State & Buffer
 // ============================================================================
 
 typedef struct {
@@ -148,6 +174,56 @@ typedef struct {
 
 static tap_repeat_t tt_state = {0}; // ゼロ初期化
 #endif
+
+bool is_any_th_waiting(void) {
+    for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++)
+        if (th_instances[i].active && th_instances[i].state == ST_WAITING) return true;
+    return false;
+}
+
+void replay_buffer(void) {
+    if (is_replaying || is_any_th_waiting()) return;
+    is_replaying = true;
+    if (buf_count > 0 && DEBUG_SVM) {
+        uprintf("SVM: Replaying %d events\n", buf_count);
+    }
+
+    uint8_t i = 0;
+    while (i < buf_count) {
+        svm_event_t current_event = event_buffer[i];
+        if (DEBUG_SVM) uprintf("SVM:   Replay Event [Col:%d Row:%d], Pressed:%d\n",
+                            current_event.record.event.key.col,
+                            current_event.record.event.key.row,
+                            current_event.record.event.pressed);
+
+        process_record(&(current_event.record));
+        i++;
+
+        // 【追加】ポーズ条件の厳格化
+        if (current_event.record.event.pressed && is_any_th_waiting()) {
+            bool release_found_in_buffer = false;
+            for (uint8_t j = i; j < buf_count; j++) {
+                if (event_buffer[j].record.event.key.col == current_event.record.event.key.col &&
+                    event_buffer[j].record.event.key.row == current_event.record.event.key.row &&
+                    !event_buffer[j].record.event.pressed) {
+                    release_found_in_buffer = true;
+                    break;
+                }
+            }
+            if (!release_found_in_buffer) {
+                if (DEBUG_SVM) uprintf("SVM: Replay paused at event %d\n", i);
+                break;
+            }
+        }
+    }
+
+    uint8_t remaining = buf_count - i;
+    for (uint8_t j = 0; j < remaining; j++) {
+        event_buffer[j] = event_buffer[i + j];
+    }
+    buf_count = remaining;
+    is_replaying = false;
+}
 
 // ============================================================================
 // Helpers: Key Classification
@@ -206,61 +282,7 @@ bool is_press_buffered(uint8_t col, uint8_t row) {
 }
 
 // ============================================================================
-// Event Buffer: Operations
-// ============================================================================
-
-bool is_any_th_waiting(void) {
-    for (uint8_t i = 0; i < MAX_ACTIVE_TH; i++)
-        if (th_instances[i].active && th_instances[i].state == ST_WAITING) return true;
-    return false;
-}
-
-void replay_buffer(void) {
-    if (is_replaying || is_any_th_waiting()) return;
-    is_replaying = true;
-    if (buf_count > 0 && DEBUG_SVM) {
-        uprintf("SVM: Replaying %d events\n", buf_count);
-    }
-
-    uint8_t i = 0;
-    while (i < buf_count) {
-        svm_event_t current_event = event_buffer[i];
-        if (DEBUG_SVM) uprintf("SVM:   Replay Event [Col:%d Row:%d], Pressed:%d\n",
-                            current_event.record.event.key.col,
-                            current_event.record.event.key.row,
-                            current_event.record.event.pressed);
-
-        process_record(&(current_event.record));
-        i++;
-
-        // 【追加】ポーズ条件の厳格化
-        if (current_event.record.event.pressed && is_any_th_waiting()) {
-            bool release_found_in_buffer = false;
-            for (uint8_t j = i; j < buf_count; j++) {
-                if (event_buffer[j].record.event.key.col == current_event.record.event.key.col &&
-                    event_buffer[j].record.event.key.row == current_event.record.event.key.row &&
-                    !event_buffer[j].record.event.pressed) {
-                    release_found_in_buffer = true;
-                    break;
-                }
-            }
-            if (!release_found_in_buffer) {
-                if (DEBUG_SVM) uprintf("SVM: Replay paused at event %d\n", i);
-                break;
-            }
-        }
-    }
-
-    uint8_t remaining = buf_count - i;
-    for (uint8_t j = 0; j < remaining; j++) {
-        event_buffer[j] = event_buffer[i + j];
-    }
-    buf_count = remaining;
-    is_replaying = false;
-}
-
-// ============================================================================
-// T&H Action Execution
+// T&H Engine
 // ============================================================================
 
 void execute_dynamic_hold(uint16_t keycode, bool pressed) {
@@ -298,8 +320,90 @@ void settle_instance(uint8_t inst_idx, bool as_hold) {
     }
 }
 
+static void peek_buffer_for_y(th_instance_t *inst) {
+    if (inst->combined || buf_count == 0) return;
+    for (uint8_t j = 0; j < buf_count; j++) {
+        if (!event_buffer[j].record.event.pressed) continue;
+        if (event_buffer[j].record.event.time < inst->timer) continue;
+
+        inst->combined = true;
+        inst->y = (uint16_t)(event_buffer[j].record.event.time - inst->timer);
+
+#if CROSS_HAND_CONSTRAINT
+        if (is_cross_hand_target(inst->keycode) && is_pure_typing_key(event_buffer[j].keycode)) {
+            bool th_is_left = is_left_hand(inst->row);
+            bool other_is_left = is_left_hand(event_buffer[j].record.event.key.row);
+            if (th_is_left == other_is_left) {
+                inst->force_tap = true;
+                if (DEBUG_SVM) uprintf("SVM: Peeked Cross-hand violated! Forced TAP. [Key:0x%04X]\n", inst->keycode);
+            }
+        }
+#endif
+        if (DEBUG_SVM) uprintf("SVM: Peeked buffer for Y! [Y:%dms]\n", inst->y);
+        break;
+    }
+}
+
+static void process_waiting(uint8_t i) {
+    th_instance_t *inst = &th_instances[i];
+
+    peek_buffer_for_y(inst);
+
+    uint16_t t = timer_elapsed(inst->timer);
+    uint16_t tap_kc = inst->keycode & 0xFF;
+    svm_config_t params = get_svm_params(tap_kc);
+    bool settle_now = false;
+
+#if CROSS_HAND_CONSTRAINT
+    if (inst->force_tap) { inst->is_hold = false; settle_now = true; } else
+#endif
+    if (inst->x != 0xFFFF && inst->y != 0xFFFF) {
+        int32_t score = get_svm_score(tap_kc, inst->x, inst->y);
+        inst->is_hold = (score > 0);
+        settle_now = true;
+        if (DEBUG_SVM) uprintf("SVM-SCORE: X:%dms, Y:%dms -> Score:%d (Hold:%d)\n", inst->x, inst->y, score, inst->is_hold);
+    } else if (inst->x != 0xFFFF) {
+#if TAP_NON_OVERLAPPED
+        inst->timeout = MIN_WAIT_TIME;
+#else
+        inst->timeout = compute_dynamic_timeout(params.w_x, inst->x, params.w_y, params.b, params.guard);
+#endif
+        inst->is_hold = false;
+        if (t >= inst->timeout) settle_now = true;
+    } else if (inst->y != 0xFFFF) {
+        inst->timeout = compute_dynamic_timeout(params.w_y, inst->y, params.w_x, params.b, params.guard);
+        inst->is_hold = true;
+        if (t >= inst->timeout) settle_now = true;
+    } else {
+        if (t >= inst->timeout) settle_now = true;
+    }
+
+    if (settle_now) {
+        bool was_hold = inst->is_hold;
+        settle_instance(i, was_hold);
+        if (DEBUG_SVM) uprintf("SVM: Timeout! Settled as %s [Key:0x%04X]\n", was_hold ? "HOLD" : "TAP", inst->keycode);
+        if (was_hold && inst->x != 0xFFFF) {
+            inst->state = ST_RELEASING;
+            inst->timer = timer_read();
+        }
+    }
+}
+
+static void process_releasing(uint8_t i) {
+    th_instance_t *inst = &th_instances[i];
+    if (is_any_th_waiting()) {
+        inst->timer = timer_read();
+        return;
+    }
+    if (timer_elapsed(inst->timer) > HOLD_RELEASE_DELAY) {
+        execute_dynamic_hold(inst->keycode, false);
+        inst->active = false;
+        if (DEBUG_SVM) uprintf("SVM: HOLD safely released [Key:0x%04X]\n", inst->keycode);
+    }
+}
+
 // ============================================================================
-// Event Handlers (process_record_user helpers)
+// Event Handlers
 // ============================================================================
 
 static void handle_other_key_press(uint16_t keycode, keyrecord_t *record) {
@@ -464,27 +568,6 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 }
 
 // ============================================================================
-// SVM Scoring
-// ============================================================================
-
-int32_t get_svm_score(uint16_t tap_kc, uint16_t x, uint16_t y) {
-    svm_config_t params = get_svm_params(tap_kc);
-
-    // 1. SVMのスコア
-    int32_t svm_score = params.w_x * x + params.w_y * y + params.b;
-
-#if TAP_NON_OVERLAPPED
-    // 2. 物理的なオーバーラップスコア (x > y ならプラス)
-    int32_t overlap_score = (int32_t)x - (int32_t)y;
-
-    // 3. 2つの式の最小値を取る (両方 >0 の場合のみプラスになる)
-    return (svm_score < overlap_score) ? svm_score : overlap_score;
-#else
-    return svm_score;
-#endif
-}
-
-// ============================================================================
 // Training Log (Debug)
 // ============================================================================
 
@@ -526,100 +609,6 @@ void training_log(void) {
     }
 }
 #endif
-
-// ============================================================================
-// T&H State Handlers (matrix_scan_user helpers)
-// ============================================================================
-
-static void peek_buffer_for_y(th_instance_t *inst) {
-    if (inst->combined || buf_count == 0) return;
-    for (uint8_t j = 0; j < buf_count; j++) {
-        if (!event_buffer[j].record.event.pressed) continue;
-        if (event_buffer[j].record.event.time < inst->timer) continue;
-
-        inst->combined = true;
-        inst->y = (uint16_t)(event_buffer[j].record.event.time - inst->timer);
-
-#if CROSS_HAND_CONSTRAINT
-        if (is_cross_hand_target(inst->keycode) && is_pure_typing_key(event_buffer[j].keycode)) {
-            bool th_is_left = is_left_hand(inst->row);
-            bool other_is_left = is_left_hand(event_buffer[j].record.event.key.row);
-            if (th_is_left == other_is_left) {
-                inst->force_tap = true;
-                if (DEBUG_SVM) uprintf("SVM: Peeked Cross-hand violated! Forced TAP. [Key:0x%04X]\n", inst->keycode);
-            }
-        }
-#endif
-        if (DEBUG_SVM) uprintf("SVM: Peeked buffer for Y! [Y:%dms]\n", inst->y);
-        break;
-    }
-}
-
-static uint16_t compute_dynamic_timeout(int32_t w_num, uint16_t val, int32_t w_den, int32_t b, uint16_t guard) {
-    if (w_den == 0) return MIN_WAIT_TIME;
-    int32_t t = -(w_num * val + b) / w_den;
-    if (t < MIN_WAIT_TIME) return MIN_WAIT_TIME;
-    if (t > guard)         return guard;
-    return (uint16_t)t;
-}
-
-static void process_waiting(uint8_t i) {
-    th_instance_t *inst = &th_instances[i];
-
-    peek_buffer_for_y(inst);
-
-    uint16_t t = timer_elapsed(inst->timer);
-    uint16_t tap_kc = inst->keycode & 0xFF;
-    svm_config_t params = get_svm_params(tap_kc);
-    bool settle_now = false;
-
-#if CROSS_HAND_CONSTRAINT
-    if (inst->force_tap) { inst->is_hold = false; settle_now = true; } else
-#endif
-    if (inst->x != 0xFFFF && inst->y != 0xFFFF) {
-        int32_t score = get_svm_score(tap_kc, inst->x, inst->y);
-        inst->is_hold = (score > 0);
-        settle_now = true;
-        if (DEBUG_SVM) uprintf("SVM-SCORE: X:%dms, Y:%dms -> Score:%d (Hold:%d)\n", inst->x, inst->y, score, inst->is_hold);
-    } else if (inst->x != 0xFFFF) {
-#if TAP_NON_OVERLAPPED
-        inst->timeout = MIN_WAIT_TIME;
-#else
-        inst->timeout = compute_dynamic_timeout(params.w_x, inst->x, params.w_y, params.b, params.guard);
-#endif
-        inst->is_hold = false;
-        if (t >= inst->timeout) settle_now = true;
-    } else if (inst->y != 0xFFFF) {
-        inst->timeout = compute_dynamic_timeout(params.w_y, inst->y, params.w_x, params.b, params.guard);
-        inst->is_hold = true;
-        if (t >= inst->timeout) settle_now = true;
-    } else {
-        if (t >= inst->timeout) settle_now = true;
-    }
-
-    if (settle_now) {
-        bool was_hold = inst->is_hold;
-        settle_instance(i, was_hold);
-        if (DEBUG_SVM) uprintf("SVM: Timeout! Settled as %s [Key:0x%04X]\n", was_hold ? "HOLD" : "TAP", inst->keycode);
-        if (was_hold && inst->x != 0xFFFF) {
-            inst->state = ST_RELEASING;
-            inst->timer = timer_read();
-        }
-    }
-}
-
-static void process_releasing(uint8_t i) {
-    th_instance_t *inst = &th_instances[i];
-    if (is_any_th_waiting()) {
-        inst->timer = timer_read();
-        return;
-    }
-    if (timer_elapsed(inst->timer) > HOLD_RELEASE_DELAY) {
-        execute_dynamic_hold(inst->keycode, false);
-        inst->active = false;
-        if (DEBUG_SVM) uprintf("SVM: HOLD safely released [Key:0x%04X]\n", inst->keycode);
-    }
-}
 
 // ============================================================================
 // Entry: matrix_scan_user
