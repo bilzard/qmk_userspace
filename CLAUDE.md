@@ -23,7 +23,13 @@ qmk setup
 qmk compile -kb salicylic_acid3/7skb -km svmv2
 ```
 
-Flashing is done via **QMK Toolbox** (not `qmk flash`) — the CLI cannot reliably detect the Pro Micro bootloader entry.
+Flashing:
+
+```bash
+qmk flash -kb salicylic_acid3/7skb -km svmv2
+```
+
+Default bootloader is `atmel-dfu` (Pro Micro with ATm32U4DFU). Override with `-bl avrdude` for Caterina devices.
 
 If `qmk doctor` reports ARM GCC errors, ignore them: 7skb is AVR-based and builds fine as long as `Successfully compiled using avr-gcc` is shown.
 
