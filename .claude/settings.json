@@ -1,7 +1,11 @@
 {
     "permissions": {
         "allow": [
-            "Read(git *)"
+            "Read(git *)",
+            "Read(ls *)",
+            "Read(cat *)",
+            "Read(find *)",
+            "Read(grep *)"
         ],
         "deny": []
     }
