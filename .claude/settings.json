@@ -1,8 +1,8 @@
 {
     "permissions": {
-        "deny": [
-            "Read(./.venv)",
-            "Read(./external)"
-        ]
+        "allow": [
+            "Read(git *)"
+        ],
+        "deny": []
     }
 }
