@@ -1,6 +1,4 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with this keymap.
+# svmv2 keymap
 
 ## Overview
 

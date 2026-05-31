@@ -39,6 +39,11 @@ preprocessed/            ← labelled stroke data used for SVM training
 logs/                    ← raw key event logs captured from the keyboard
 ```
 
+## Keymap documentation
+
+- [svmv2](keyboards/salicylic_acid3/7skb/keymaps/svmv2/README.md) — custom SVM Tap/Hold engine
+- [40style](keyboards/salicylic_acid3/7skb/keymaps/40style/README.md) — QMK native Tap/Hold + Retro Tap
+
 ## CI
 
 GitHub Actions builds on every push using the official `qmk/.github` reusable workflow and publishes firmware artifacts. Build targets are declared in `qmk.json`.
