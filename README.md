@@ -35,7 +35,23 @@ qmk compile -kb salicylic_acid3/7skb -km svmv2
 
 ### 書き込み (Flash)
 
-手元の環境ではCLIコマンド(`qmk flash`)はProMicroの書き込み待機状態への遷移を検知できなかったのでQMK Toolboxを使ってください。
+**左右でbootloaderが異なります。** 書き込む側にUSBケーブルを挿し替えて、左右それぞれに書き込んでください（TRRS経由では書き込めません）。
+
+| | USB ID | bootloader | 書き込みツール |
+|---|---|---|---|
+| 左 | `03EB:2FF4` (ATMEL ATm32U4DFU) | atmel-dfu | dfu-programmer |
+| 右 | `2341:0037` (Arduino Micro) | Caterina | avrdude |
+
+```bash
+qmk flash -kb salicylic_acid3/7skb -km svmv2                # 左
+qmk flash -kb salicylic_acid3/7skb -km svmv2 -bl avrdude    # 右
+```
+
+`svmv2/rules.mk` の `BOOTLOADER = atmel-dfu` は左に合わせた指定です。ファームは1つで`QK_BOOT`のジャンプ先はビルド時に固定されるため、**`QK_BOOT`はUSBを挿している側が左のときだけ動きます**。右に書き込むときはリセットスイッチを押してください。
+
+左右を揃える案は [issue #2](https://github.com/bilzard/qmk_userspace/issues/2) を参照。
+
+QMK Toolboxでも書き込めます（bootloaderを自動判別するため`-bl`の指定は不要）。ただしIntelバイナリなのでApple SiliconではRosettaが必要です。
 
 ## 3. トラブルシューティング
 
