@@ -23,13 +23,14 @@ qmk setup
 qmk compile -kb salicylic_acid3/7skb -km svmv2
 ```
 
-Flashing:
+Flashing. The two halves have **different bootloaders**, so flash each half separately with the USB cable plugged into the half being flashed (TRRS does not carry flashing):
 
 ```bash
-qmk flash -kb salicylic_acid3/7skb -km svmv2
+qmk flash -kb salicylic_acid3/7skb -km svmv2                # left  (ATm32U4DFU, atmel-dfu)
+qmk flash -kb salicylic_acid3/7skb -km svmv2 -bl avrdude    # right (Caterina)
 ```
 
-Default bootloader is `atmel-dfu` (Pro Micro with ATm32U4DFU). Override with `-bl avrdude` for Caterina devices.
+`svmv2/rules.mk` sets `BOOTLOADER = atmel-dfu` to match the left half. Since one firmware image can only target one bootloader, `QK_BOOT` works **only when the left half is the USB-connected one** — flash the right half using its reset switch. See [issue #2](https://github.com/bilzard/qmk_userspace/issues/2) for the plan to unify both halves via ISP.
 
 If `qmk doctor` reports ARM GCC errors, ignore them: 7skb is AVR-based and builds fine as long as `Successfully compiled using avr-gcc` is shown.
 
